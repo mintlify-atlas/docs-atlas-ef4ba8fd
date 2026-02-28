@@ -253,7 +253,97 @@ if let Some(width) = breakdown.binop_atomic_width {
 }
 ```
 
+## Builder Traits
+
+### NoirProofSchemeBuilder
+
+Trait for constructing proof schemes from Noir programs.
+
+```rust
+pub trait NoirProofSchemeBuilder {
+    fn from_file(path: impl AsRef<Path>) -> Result<Self>;
+    fn from_program(program: ProgramArtifact) -> Result<Self>;
+}
+```
+
+<ParamField path="from_file" type="fn(path) -> Result<Self>">
+  Loads a Noir program from a compiled JSON artifact file and builds a complete proof scheme
+</ParamField>
+
+<ParamField path="from_program" type="fn(program) -> Result<Self>">
+  Constructs a proof scheme from a pre-loaded `ProgramArtifact`
+</ParamField>
+
+**Example:**
+
+```rust
+use provekit_r1cs_compiler::NoirProofSchemeBuilder;
+use provekit_common::NoirProofScheme;
+
+// Load from compiled Noir program
+let scheme = NoirProofScheme::from_file("./target/basic.json")?;
+
+// This compiles the ACIR to R1CS and sets up witness generators
+println!("Constraints: {}", scheme.r1cs.num_constraints());
+```
+
+### WhirR1CSSchemeBuilder
+
+Trait for constructing WHIR proof schemes optimized for R1CS instances.
+
+```rust
+pub trait WhirR1CSSchemeBuilder {
+    fn new_for_r1cs(
+        r1cs: &R1CS,
+        w1_size: usize,
+        num_challenges: usize,
+        has_public_inputs: bool,
+    ) -> Self;
+    
+    fn new_whir_zk_config_for_size(
+        num_variables: usize,
+        num_polynomials: usize,
+    ) -> WhirZkConfig;
+}
+```
+
+<ParamField path="new_for_r1cs" type="fn(r1cs, w1_size, num_challenges, has_public_inputs) -> Self">
+  Creates a WHIR scheme configured for a specific R1CS instance with security parameters
+</ParamField>
+
+<ParamField path="new_whir_zk_config_for_size" type="fn(num_variables, num_polynomials) -> WhirZkConfig">
+  Generates optimal zero-knowledge configuration based on instance size
+</ParamField>
+
+**Parameters:**
+
+- `w1_size` - Size of first folding step (affects proof size and proving time)
+- `num_challenges` - Number of sumcheck challenges (affects soundness error)
+- `has_public_inputs` - Whether the R1CS has public inputs requiring special handling
+
+**Example:**
+
+```rust
+use provekit_r1cs_compiler::WhirR1CSSchemeBuilder;
+use provekit_common::WhirR1CSScheme;
+
+// Configure WHIR for R1CS
+let whir_scheme = WhirR1CSScheme::new_for_r1cs(
+    &r1cs,
+    20,    // w1_size: first fold to 2^20
+    30,    // num_challenges: 30 sumcheck rounds
+    true,  // has_public_inputs
+);
+
+// Get zero-knowledge configuration
+let zk_config = WhirR1CSScheme::new_whir_zk_config_for_size(
+    r1cs.num_witnesses(),
+    r1cs.num_constraints(),
+);
+```
+
 ## Source Reference
 
 - Main compiler: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:112-136`
+- Builders: `provekit/r1cs-compiler/src/noir_proof_scheme.rs:95-100`, `provekit/r1cs-compiler/src/whir_r1cs.rs:37-47`
 - Exports: `provekit/r1cs-compiler/src/lib.rs:14-18`
