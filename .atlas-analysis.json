@@ -1,0 +1,128 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "ProveKit",
+  "projectDescription": "A modular zero-knowledge proof toolkit optimized for mobile devices",
+  "theme": "aspen",
+  "primaryColor": "#6B46C1",
+  "lightColor": "#9F7AEA",
+  "darkColor": "#553C9A",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/r1cs",
+              "concepts/whir-proofs",
+              "concepts/noir-integration"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/proving-workflow",
+              "guides/recursive-verification",
+              "guides/benchmarking",
+              "guides/profiling"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/skyscraper",
+              "advanced/ffi-bindings",
+              "advanced/optimization"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Library",
+            "pages": [
+              "api/prover",
+              "api/verifier",
+              "api/r1cs-compiler",
+              "api/common"
+            ]
+          },
+          {
+            "group": "CLI Commands",
+            "pages": [
+              "cli/overview",
+              "cli/prepare",
+              "cli/prove",
+              "cli/verify",
+              "cli/circuit-stats",
+              "cli/analyze-pkp",
+              "cli/show-inputs",
+              "cli/generate-gnark-inputs"
+            ]
+          },
+          {
+            "group": "Recursive Verifier",
+            "pages": [
+              "recursive-verifier/overview",
+              "recursive-verifier/http-api"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples",
+        "groups": [
+          {
+            "group": "Circuit Examples",
+            "pages": [
+              "examples/basic",
+              "examples/poseidon",
+              "examples/sha256",
+              "examples/eddsa"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Client-side zero-knowledge proving optimized for mobile devices",
+    "R1CS compilation from Noir circuits",
+    "WHIR proof system with Skyscraper field arithmetic optimization",
+    "Recursive verification using Gnark",
+    "Command-line interface for full proving workflow",
+    "FFI bindings for cross-language integration",
+    "Comprehensive benchmarking and profiling tools"
+  ],
+  "publicApiSurface": [
+    "provekit_common::Prover",
+    "provekit_common::Verifier",
+    "provekit_common::R1CS",
+    "provekit_common::NoirProof",
+    "provekit_common::PublicInputs",
+    "provekit_common::WhirR1CSScheme",
+    "provekit_r1cs_compiler - Noir circuit compilation",
+    "provekit_prover::Prove trait",
+    "provekit_verifier::Verify trait",
+    "provekit-cli prepare - Generate prover/verifier keys",
+    "provekit-cli prove - Generate proofs",
+    "provekit-cli verify - Verify proofs",
+    "provekit-cli circuit_stats - Analyze circuit complexity",
+    "provekit-cli analyze-pkp - Analyze prover key file",
+    "provekit-cli show-inputs - Display public inputs",
+    "provekit-cli generate-gnark-inputs - Generate Gnark circuit inputs",
+    "recursive-verifier HTTP API - /api/v1/verify endpoint"
+  ]
+}
