@@ -1,0 +1,464 @@
+---
+title: Profiling
+description: Profile ProveKit performance to identify bottlenecks and optimize proving times
+---
+
+Profiling helps you identify performance bottlenecks in your proving workflow. ProveKit supports multiple profiling tools for CPU, memory, and detailed execution analysis.
+
+## Overview
+
+ProveKit integrates with several profiling tools:
+
+| Tool | Type | Platform | Use Case |
+|------|------|----------|----------|
+| **Built-in Profiler** | Memory | All | Quick memory usage overview |
+| **Tracy** | CPU + Memory | All | Interactive detailed profiling |
+| **Samply** | CPU | All | CPU profiling with flamegraphs |
+| **Instruments** | Memory + CPU | macOS | Native macOS profiling |
+
+## Built-in Memory Profiler
+
+ProveKit includes a custom memory profiler for quick diagnostics.
+
+### Usage
+
+Enable profiling with the `--features profiling` flag:
+
+```bash
+cargo run --release --bin provekit-cli --features profiling prove \
+  ./prover.pkp \
+  ./Prover.toml \
+  -o ./proof.np
+```
+
+### Output
+
+The profiler prints memory usage statistics:
+
+```
+=== Memory Profile ===
+Peak RSS: 2.34 GB
+Current RSS: 1.87 GB
+Witness Generation: 456 MB
+Proof Generation: 1.42 GB
+======================
+```
+
+**Metrics:**
+- **Peak RSS** - Maximum resident set size (memory used)
+- **Current RSS** - Current memory usage
+- **Phase Breakdown** - Memory per proving phase
+
+## Tracy Profiler (Interactive CPU + Memory)
+
+Tracy is a real-time, interactive profiler with detailed execution traces.
+
+### Installation
+
+**macOS:**
+```bash
+brew install tracy
+```
+
+**Linux:**
+```bash
+# Download from GitHub releases
+wget https://github.com/wolfpld/tracy/releases/download/v0.11.1/Tracy-0.11.1.tar.gz
+tar -xzf Tracy-0.11.1.tar.gz
+cd tracy
+make -C profiler/build/unix release
+```
+
+**Windows:**
+Download pre-built binaries from [Tracy releases](https://github.com/wolfpld/tracy/releases).
+
+<Note>
+ProveKit integrates with Tracy 0.11.1. Newer versions may require dependency updates due to protocol changes.
+</Note>
+
+### Workflow
+
+<Steps>
+  <Step title="Start Tracy">
+    Launch the Tracy GUI:
+
+    ```bash
+    tracy
+    ```
+
+    In the Tracy window:
+    1. Leave all fields with defaults
+    2. Click **Connect**
+    3. Tracy will listen on localhost for incoming data
+  </Step>
+
+  <Step title="Build with Profiling">
+    Compile ProveKit with Tracy support:
+
+    ```bash
+    cargo build --release --bin provekit-cli --features profiling
+    ```
+  </Step>
+
+  <Step title="Extract Debug Symbols (macOS only)">
+    For call stack analysis on macOS, extract debug symbols:
+
+    ```bash
+    dsymutil ../../target/release/provekit-cli
+    ```
+
+    This creates a `.dSYM` directory with Tracy-compatible symbols. Re-run this after each code change.
+  </Step>
+
+  <Step title="Run Profiled Application">
+    Execute your prove command:
+
+    ```bash
+    cd noir-examples/poseidon-rounds
+    ../../target/release/provekit-cli prove \
+      ./prover.pkp \
+      ./Prover.toml \
+      -o ./proof.np
+    ```
+
+    Tracy will receive real-time profiling data.
+  </Step>
+
+  <Step title="Analyze Results">
+    In the Tracy GUI:
+    - View timeline of execution
+    - Inspect function call stacks
+    - Analyze memory allocations
+    - Identify performance bottlenecks
+    - Zoom into specific regions
+  </Step>
+</Steps>
+
+### Tracy Features
+
+**Timeline View:**
+- Visualize execution over time
+- See parallel execution (if any)
+- Identify long-running operations
+
+**Call Stacks:**
+- Drill down into function calls
+- View time spent in each function
+- Identify hot paths
+
+**Memory Tracking:**
+- Allocation/deallocation events
+- Memory leak detection
+- Peak memory usage
+
+**Statistics:**
+- Function execution counts
+- Average/min/max times
+- Standard deviation
+
+<Warning>
+Tracy increases execution time significantly due to data transfer overhead. Use it for analysis, not benchmarking.
+</Warning>
+
+## Samply (CPU Profiling + Flamegraphs)
+
+Samply provides CPU profiling with interactive flamegraphs in your browser.
+
+### Installation
+
+**All Platforms:**
+```bash
+cargo install samply
+```
+
+See the [Samply README](https://github.com/mstange/samply/) for platform-specific notes.
+
+### Usage
+
+Profile with high sampling rate (10,000 Hz):
+
+```bash
+cd noir-examples/poseidon-rounds
+samply record -r 10000 -- ../../target/release/provekit-cli prove \
+  ./prover.pkp \
+  ./Prover.toml \
+  -o ./proof.np
+```
+
+**Note:** No need to build with `--features profiling`.
+
+### Output
+
+Samply automatically:
+1. Profiles the application
+2. Starts a local web server
+3. Opens your browser with an interactive viewer
+
+### Flamegraph Analysis
+
+**X-axis:** Time or samples
+**Y-axis:** Call stack depth
+**Width:** Time spent in function (including children)
+
+**How to use:**
+- Click on functions to zoom in
+- Hover to see details
+- Search for specific functions
+- Identify which functions consume the most CPU
+
+**Common patterns:**
+- Wide bars = expensive operations
+- Tall stacks = deep recursion
+- Many small bars = fragmented execution
+
+### Best Practices
+
+- Use high sampling rates (`-r 10000`) for accuracy
+- Run for representative workloads
+- Look for unexpected hot spots
+- Compare before/after optimization
+
+## Instruments (macOS Native Profiling)
+
+Instruments is Apple's native profiling tool, integrated via `cargo-instruments`.
+
+### Installation
+
+```bash
+cargo install cargo-instruments
+```
+
+**Prerequisites:**
+- Xcode Command Line Tools
+- macOS only
+
+### Memory Profiling
+
+Profile memory allocations:
+
+```bash
+cd noir-examples/poseidon-rounds
+cargo instruments --template Allocations --release --bin provekit-cli -- \
+  prove ./prover.pkp ./Prover.toml -o ./proof.np
+```
+
+This:
+1. Builds the release binary
+2. Profiles memory allocations
+3. Opens results in Instruments.app
+
+### CPU Profiling
+
+Profile CPU usage:
+
+```bash
+cargo instruments --template Time\ Profiler --release --bin provekit-cli -- \
+  prove ./prover.pkp ./Prover.toml -o ./proof.np
+```
+
+### Available Templates
+
+View all available profiling templates:
+
+```bash
+cargo instruments --list-templates
+```
+
+Common templates:
+- **Allocations** - Memory allocation tracking
+- **Leaks** - Memory leak detection
+- **Time Profiler** - CPU profiling
+- **System Trace** - System-wide tracing
+- **File Activity** - Disk I/O profiling
+
+### Instruments Features
+
+**Call Trees:**
+- Hierarchical view of function calls
+- Time/memory per function
+- Drill down into expensive operations
+
+**Timeline:**
+- Execution over time
+- Memory growth patterns
+- Allocation spikes
+
+**Inspectors:**
+- Detailed allocation backtraces
+- Object lifecycle
+- Retain/release events
+
+### Best Practices
+
+- Always use `--release` for realistic performance
+- Profile representative workloads
+- Use multiple templates for comprehensive analysis
+- Save traces for future reference
+
+## Comparative Profiling Example
+
+Profile the same operation with all tools:
+
+```bash
+cd noir-examples/poseidon-rounds
+nargo compile
+
+cargo run --release --bin provekit-cli prepare \
+  ./target/basic.json \
+  --pkp ./prover.pkp \
+  --pkv ./verifier.pkv
+
+# Built-in profiler
+cargo run --release --bin provekit-cli --features profiling prove \
+  ./prover.pkp ./Prover.toml -o ./proof.np
+
+# Samply (CPU)
+samply record -r 10000 -- ../../target/release/provekit-cli prove \
+  ./prover.pkp ./Prover.toml -o ./proof.np
+
+# Instruments (macOS - Memory)
+cargo instruments --template Allocations --release --bin provekit-cli -- \
+  prove ./prover.pkp ./Prover.toml -o ./proof.np
+
+# Tracy (Interactive) - Start tracy first, then:
+cargo build --release --bin provekit-cli --features profiling
+dsymutil ../../target/release/provekit-cli
+../../target/release/provekit-cli prove ./prover.pkp ./Prover.toml -o ./proof.np
+```
+
+## Profiling Workflow Phases
+
+Profile different proving phases separately:
+
+### Witness Generation
+
+```bash
+# Use Tracy to identify witness generation time
+# Look for functions in the witness generation module
+```
+
+### Constraint Evaluation
+
+```bash
+# Profile R1CS constraint evaluation
+# Look for matrix operations and field arithmetic
+```
+
+### WHIR Protocol
+
+```bash
+# Profile WHIR-specific operations
+# Look for polynomial commitments and FRI protocol
+```
+
+## Interpreting Results
+
+### Common Bottlenecks
+
+**Large memory allocations:**
+- Look for allocation spikes in Instruments or Tracy
+- Consider streaming or chunking data
+- Optimize data structures
+
+**Hot loops:**
+- Identified by wide bars in Samply flamegraphs
+- Optimize inner loop operations
+- Consider vectorization or parallelization
+
+**Deep call stacks:**
+- May indicate recursion or abstraction overhead
+- Consider iterative alternatives
+- Inline hot functions
+
+### Optimization Workflow
+
+<Steps>
+  <Step title="Establish Baseline">
+    Profile the current implementation:
+
+    ```bash
+    samply record -r 10000 -- ../../target/release/provekit-cli prove \
+      ./prover.pkp ./Prover.toml -o ./proof.np
+    ```
+  </Step>
+
+  <Step title="Identify Bottleneck">
+    Analyze the flamegraph or Tracy output:
+    - Which function uses the most time?
+    - Are there unexpected operations?
+    - Is memory allocation excessive?
+  </Step>
+
+  <Step title="Optimize">
+    Apply optimizations:
+    - Algorithmic improvements
+    - Better data structures
+    - Reduced allocations
+    - Parallelization
+  </Step>
+
+  <Step title="Measure Improvement">
+    Profile again and compare:
+
+    ```bash
+    samply record -r 10000 -- ../../target/release/provekit-cli prove \
+      ./prover.pkp ./Prover.toml -o ./proof.np
+    ```
+  </Step>
+
+  <Step title="Iterate">
+    Repeat until performance goals are met.
+  </Step>
+</Steps>
+
+## Tool Comparison
+
+### When to Use Each Tool
+
+**Built-in Profiler:**
+- Quick memory overview
+- No external dependencies
+- Basic diagnostics
+
+**Tracy:**
+- Detailed execution analysis
+- When you need call stacks
+- Interactive exploration
+- Memory + CPU together
+
+**Samply:**
+- CPU-focused optimization
+- Visual flamegraphs
+- Quick identification of hot paths
+- Cross-platform
+
+**Instruments:**
+- macOS-specific profiling
+- Native tool integration
+- Multiple profiling types
+- Production-ready traces
+
+## CI/CD Integration
+
+Automate profiling in CI:
+
+```yaml
+- name: Profile performance
+  run: |
+    cargo build --release --bin provekit-cli --features profiling
+    cd noir-examples/poseidon-rounds
+    cargo run --release --bin provekit-cli --features profiling prove \
+      ./prover.pkp ./Prover.toml -o ./proof.np 2>&1 | tee profile.log
+    
+- name: Upload profile results
+  uses: actions/upload-artifact@v3
+  with:
+    name: profile-results
+    path: noir-examples/poseidon-rounds/profile.log
+```
+
+## Next Steps
+
+- Learn about [Benchmarking](/guides/benchmarking) to measure improvements
+- Explore the [Architecture](/concepts/architecture) to understand code structure
+- See the [Proving Workflow](/guides/proving-workflow) for end-to-end usage

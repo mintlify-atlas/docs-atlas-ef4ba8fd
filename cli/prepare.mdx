@@ -1,0 +1,109 @@
+---
+title: prepare
+description: Prepare a compiled Noir program for proving
+---
+
+The `prepare` command processes a compiled Noir program and generates the necessary files for proving and verification.
+
+## Command Syntax
+
+```bash
+provekit-cli prepare <program_path> [OPTIONS]
+```
+
+## Arguments
+
+<ParamField path="program_path" type="string" required>
+  Path to the compiled Noir program (`.json` file)
+</ParamField>
+
+## Options
+
+<ParamField path="--pkp, -p" type="string" default="noir_proof_scheme.pkp">
+  Output path for the prepared proof scheme (prover file)
+</ParamField>
+
+<ParamField path="--pkv, -v" type="string" default="noir_proof_scheme.pkv">
+  Output path for the verifier file
+</ParamField>
+
+## Output Files
+
+The `prepare` command generates two files:
+
+1. **PKP file** (`.pkp`): Contains the prover data needed for proof generation
+   - ACIR program
+   - R1CS constraint system
+   - Split witness builders
+   - Witness generator
+   - WHIR scheme for witness
+
+2. **PKV file** (`.pkv`): Contains the verifier data needed for proof verification
+   - ABI information
+   - Public input specifications
+   - Verification parameters
+
+## Examples
+
+### Basic Usage
+
+Prepare a circuit with default output files:
+
+```bash
+provekit-cli prepare ./target/circuit.json
+```
+
+This creates:
+- `noir_proof_scheme.pkp` (prover file)
+- `noir_proof_scheme.pkv` (verifier file)
+
+### Custom Output Paths
+
+Specify custom output paths:
+
+```bash
+provekit-cli prepare ./target/circuit.json \
+  --pkp ./build/my_circuit.pkp \
+  --pkv ./build/my_circuit.pkv
+```
+
+### Using Short Flags
+
+```bash
+provekit-cli prepare circuit.json -p prover.pkp -v verifier.pkv
+```
+
+## Expected Output
+
+Successful preparation produces no console output. The command returns exit code 0 and generates the PKP and PKV files.
+
+If an error occurs, you'll see context about the failure:
+
+```
+Error: while compiling Noir program
+
+Caused by:
+    Failed to read circuit file: circuit.json
+```
+
+## What Happens During Preparation
+
+The prepare command:
+
+1. Loads the compiled Noir program from the JSON file
+2. Compiles the ACIR circuit to R1CS format
+3. Generates witness builders for proof generation
+4. Creates the WHIR proof scheme
+5. Serializes and writes the prover (PKP) and verifier (PKV) files
+
+## Next Steps
+
+After preparation:
+
+1. Use the PKP file with the [`prove`](/cli/prove) command to generate proofs
+2. Use the PKV file with the [`verify`](/cli/verify) command to verify proofs
+3. Analyze the PKP file with [`analyze-pkp`](/cli/analyze-pkp) to understand its size breakdown
+
+## Source Reference
+
+Implementation: `tooling/cli/src/cmd/prepare.rs`

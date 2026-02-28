@@ -1,0 +1,492 @@
+---
+title: 'Performance Optimization'
+description: 'Memory optimization, performance tuning, and parallel execution in ProveKit'
+---
+
+# Performance Optimization
+
+ProveKit is designed for high-performance zero-knowledge proof generation. This guide covers memory optimization techniques, performance tuning, parallel execution strategies, and configuration options.
+
+## Memory Optimization
+
+### Memory Allocator Configuration
+
+ProveKit supports custom memory allocators with RAM limits and swap:
+
+```c
+// Configure before pk_init()
+int pk_configure_memory(
+    size_t ram_limit_bytes,      // Max RAM before swap
+    bool use_file_backed,         // Enable file-backed swap
+    const char *swap_file_path    // Swap directory (NULL = temp)
+);
+```
+
+**Example**:
+```c
+// Limit to 8GB RAM, use file-backed swap in /tmp
+pk_configure_memory(8ULL * 1024 * 1024 * 1024, true, "/tmp");
+pk_init();
+```
+
+Reference: `tooling/provekit-ffi/src/ffi.rs:192`
+
+### Memory Statistics
+
+Monitor memory usage in real-time:
+
+```c
+size_t ram_used, swap_used, peak_ram;
+pk_get_memory_stats(&ram_used, &swap_used, &peak_ram);
+
+printf("RAM: %zu MB, Swap: %zu MB, Peak: %zu MB\n",
+       ram_used / (1024 * 1024),
+       swap_used / (1024 * 1024),
+       peak_ram / (1024 * 1024));
+```
+
+Reference: `tooling/provekit-ffi/src/ffi.rs:225`
+
+### Sparse Matrix Optimization
+
+ProveKit uses optimized sparse matrix operations for R1CS constraints:
+
+```rust
+// Parallel right multiplication (optimized)
+pub fn mul_vec_right(&self, vec: &[F]) -> Vec<F> {
+    self.rows.par_iter()
+        .map(|row| {
+            row.iter()
+                .map(|(col_idx, val)| *val * vec[*col_idx])
+                .sum()
+        })
+        .collect()
+}
+```
+
+This uses **parallel iteration** over rows for better cache locality than left multiplication.
+
+Reference: `provekit/common/src/sparse_matrix.rs`
+
+### Matrix Transpose Optimization
+
+Transposing matrices in parallel improves cache performance:
+
+```rust
+/// Transpose all three R1CS matrices in parallel
+pub fn transpose_r1cs(r1cs: &R1CS<F>) -> (Matrix, Matrix, Matrix) {
+    let ((at, bt), ct) = rayon::join(
+        || rayon::join(
+            || r1cs.a.transpose(),
+            || r1cs.b.transpose()
+        ),
+        || r1cs.c.transpose(),
+    );
+    (at, bt, ct)
+}
+```
+
+Reference: `provekit/common/src/utils/sumcheck.rs`
+
+## Parallel Execution
+
+### Rayon for Data Parallelism
+
+ProveKit uses [Rayon](https://github.com/rayon-rs/rayon) for work-stealing parallelism:
+
+**Cargo.toml**:
+```toml
+[dependencies]
+rayon = "1.8"
+```
+
+Reference: `provekit/prover/Cargo.toml:33`
+
+### Fork-Join Parallelism
+
+ProveKit uses `rayon::join` for parallel independent computations:
+
+```rust
+// Compute A*w and B*w in parallel
+let (a, b) = rayon::join(
+    || r1cs.a() * witness,
+    || r1cs.b() * witness
+);
+```
+
+Reference: `provekit/common/src/utils/sumcheck.rs`
+
+### Parallel Sumcheck
+
+Sumcheck protocol evaluation uses recursive parallelism:
+
+```rust
+let (l, r) = rayon::join(
+    || evaluate_left_half(poly, point),
+    || evaluate_right_half(poly, point)
+);
+```
+
+This splits polynomial evaluation into independent sub-tasks.
+
+Reference: `provekit/common/src/utils/sumcheck.rs`
+
+### SIMD Parallelism
+
+Skyscraper uses SIMD for data-level parallelism:
+
+```rust
+// Process 2 field operations in parallel using SIMD
+pub fn simd_sqr(v0: [u64; 4], v1: [u64; 4]) -> ([u64; 4], [u64; 4]) {
+    // Transpose to SIMD layout
+    let simd_input = transpose_u256_to_simd([v0, v1]);
+    
+    // Compute both squarings simultaneously
+    // ...
+}
+```
+
+Reference: `skyscraper/bn254-multiplier/src/rne/batched.rs:26`
+
+## Compiler Optimizations
+
+### Cargo Profile Settings
+
+Optimal release profile for ProveKit:
+
+```toml
+[profile.release]
+opt-level = 3              # Maximum optimization
+lto = "fat"                # Link-time optimization
+codegen-units = 1          # Single codegen unit for better optimization
+strip = true               # Strip symbols
+panic = "abort"            # Smaller binary, faster unwinding
+```
+
+### Target-Specific Features
+
+Enable CPU-specific optimizations:
+
+```bash
+# x86_64 with AVX2
+RUSTFLAGS="-C target-cpu=native" cargo build --release
+
+# ARM64 with NEON
+RUSTFLAGS="-C target-feature=+neon" cargo build --release
+
+# WASM with SIMD
+RUSTFLAGS="-C target-feature=+simd128,+relaxed-simd" \
+  cargo build --release --target wasm32-wasip2
+```
+
+Reference: `.cargo/config.toml:6`
+
+### Nightly Features
+
+ProveKit uses nightly Rust features for performance:
+
+```rust
+#![feature(portable_simd)]        // Cross-platform SIMD
+#![feature(bigint_helper_methods)] // Efficient carry operations
+#![feature(cold_path)]             // Better branch prediction
+```
+
+Reference: `skyscraper/core/src/lib.rs:1`
+
+## Batch Processing
+
+### Optimal Batch Sizes
+
+Skyscraper hash engine has optimal batch sizes:
+
+```rust
+// Least common multiple of SIMD widths
+pub const WIDTH_LCM: usize = 12;
+
+// Always process in multiples of WIDTH_LCM
+let batch_size = num_operations.next_multiple_of(WIDTH_LCM);
+```
+
+Reference: `skyscraper/core/src/lib.rs:27`
+
+### Stack vs Heap Allocation
+
+For small batches, use stack allocation:
+
+```rust
+const GROUP: usize = 4 * skyscraper::WIDTH_LCM; // 48 ops
+let mut buffer = [0u8; GROUP * 64];  // 3 KiB on stack
+
+// Process in groups to avoid heap allocation
+for start in (0..count).step_by(GROUP) {
+    let n = (count - start).min(GROUP);
+    let batch = &mut buffer[..n * 64];
+    compress_many(batch, output);
+}
+```
+
+Reference: `provekit/common/src/skyscraper/whir.rs:72`
+
+## Architecture-Specific Optimizations
+
+### ARM64 (aarch64)
+
+ProveKit detects ARM64 and uses optimized code paths:
+
+```rust
+#[cfg(target_arch = "aarch64")]
+pub mod block3;
+
+#[cfg(target_arch = "aarch64")]
+pub mod block4;
+
+#[cfg(target_arch = "aarch64")]
+use skyscraper::block4::compress_many;
+```
+
+**Block3** and **Block4** implementations use ARM NEON intrinsics for 3x and 4x parallel compression.
+
+Reference: `skyscraper/core/src/lib.rs:15`
+
+### x86_64
+
+For x86_64, ProveKit uses portable SIMD that compiles to AVX2:
+
+```rust
+#[cfg(not(target_arch = "aarch64"))]
+use skyscraper::simple::compress_many;
+```
+
+The compiler auto-vectorizes to SSE/AVX when available.
+
+### WASM
+
+WebAssembly SIMD requires explicit feature flags:
+
+```toml
+[target.wasm32-wasip2]
+rustflags = ["-C", "target-feature=+simd128,+relaxed-simd"]
+```
+
+Reference: `.cargo/config.toml:6`
+
+## Performance Profiling
+
+### Using perf (Linux)
+
+```bash
+# Build with symbols
+cargo build --release
+
+# Profile proof generation
+perf record --call-graph=dwarf ./target/release/provekit prove \
+  -s scheme.pkp -i input.toml -o proof.np
+
+# Analyze hotspots
+perf report
+```
+
+### Using Instruments (macOS)
+
+```bash
+# Build for profiling
+cargo build --release
+
+# Profile with Time Profiler
+instruments -t "Time Profiler" \
+  ./target/release/provekit prove -s scheme.pkp -i input.toml
+```
+
+### Flamegraph
+
+```bash
+# Install cargo-flamegraph
+cargo install flamegraph
+
+# Generate flamegraph
+cargo flamegraph --bin provekit -- prove \
+  -s scheme.pkp -i input.toml -o proof.np
+
+# Opens flamegraph.svg in browser
+```
+
+## Benchmarking
+
+### Criterion Benchmarks
+
+ProveKit includes Criterion benchmarks:
+
+```bash
+# Run all benchmarks
+cargo bench
+
+# Run specific benchmark
+cargo bench --bench skyscraper
+
+# Save baseline
+cargo bench -- --save-baseline before
+
+# Compare against baseline
+cargo bench -- --baseline before
+```
+
+Reference: `skyscraper/core/benches/bench.rs`
+
+### Custom Benchmarks
+
+Create custom benchmarks for your circuits:
+
+```rust
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+fn bench_prove(c: &mut Criterion) {
+    let prover = /* load prover */;
+    let witness = /* load witness */;
+    
+    c.bench_function("prove_my_circuit", |b| {
+        b.iter(|| {
+            prover.prove(black_box(&witness))
+        });
+    });
+}
+
+criterion_group!(benches, bench_prove);
+criterion_main!(benches);
+```
+
+## Cache Optimization
+
+### Cache-Friendly Data Structures
+
+ProveKit uses row-major sparse matrices for better cache locality:
+
+```rust
+// Row-major storage
+pub struct SparseMatrix<F> {
+    rows: Vec<Vec<(usize, F)>>,  // Each row is contiguous
+    num_cols: usize,
+}
+
+// Iterate rows sequentially (cache-friendly)
+for row in matrix.rows.iter() {
+    for (col_idx, val) in row.iter() {
+        // Sequential access, good cache locality
+    }
+}
+```
+
+### Prefetching
+
+Use prefetching for predictable access patterns:
+
+```rust
+use std::intrinsics::prefetch_read_data;
+
+for i in 0..data.len() {
+    // Prefetch next iteration
+    if i + 1 < data.len() {
+        unsafe {
+            prefetch_read_data(&data[i + 1], 3);
+        }
+    }
+    process(data[i]);
+}
+```
+
+## Configuration Tuning
+
+### Thread Pool Size
+
+Configure Rayon thread pool:
+
+```rust
+use rayon::ThreadPoolBuilder;
+
+fn main() {
+    // Set to number of physical cores
+    ThreadPoolBuilder::new()
+        .num_threads(num_cpus::get_physical())
+        .build_global()
+        .unwrap();
+    
+    // Run ProveKit operations
+}
+```
+
+### Environment Variables
+
+```bash
+# Set Rayon threads
+export RAYON_NUM_THREADS=8
+
+# Disable thread pool (debugging)
+export RAYON_NUM_THREADS=1
+
+# Rust backtrace (development)
+export RUST_BACKTRACE=1
+
+# Logging
+export RUST_LOG=provekit=debug
+```
+
+## Best Practices
+
+<Card title="Use Batch Operations" icon="layer-group">
+  Process proofs in batches when possible. Batch operations amortize setup costs and improve cache utilization.
+</Card>
+
+<Card title="Profile Before Optimizing" icon="chart-line">
+  Always profile to identify actual bottlenecks. Premature optimization is the root of all evil.
+</Card>
+
+<Card title="Leverage Parallelism" icon="microchip">
+  Use Rayon's parallel iterators for data parallelism. Let the work-stealing scheduler handle load balancing.
+</Card>
+
+<Card title="Minimize Allocations" icon="memory">
+  Reuse buffers and prefer stack allocation for small arrays (< 4 KiB).
+</Card>
+
+<Card title="Architecture Detection" icon="server">
+  Let ProveKit auto-select optimized code paths. Don't hardcode architecture-specific code.
+</Card>
+
+## Performance Checklist
+
+- [ ] Build with `--release`
+- [ ] Enable LTO (`lto = "fat"`)
+- [ ] Set `codegen-units = 1`
+- [ ] Use `target-cpu=native` for local builds
+- [ ] Configure thread pool for your hardware
+- [ ] Use batch operations (multiples of `WIDTH_LCM`)
+- [ ] Profile with perf/Instruments/flamegraph
+- [ ] Monitor memory usage with `pk_get_memory_stats`
+- [ ] Test on target platform (don't assume x86 == ARM)
+- [ ] Run benchmarks before and after changes
+
+## Advanced: Custom SIMD Kernels
+
+For maximum performance, implement custom SIMD kernels:
+
+```rust
+use std::simd::{Simd, num::SimdFloat};
+
+#[inline(always)]
+fn simd_fma_batch(a: &[f64], b: &[f64], c: &[f64], out: &mut [f64]) {
+    const LANES: usize = 4;
+    
+    for i in (0..out.len()).step_by(LANES) {
+        let va = Simd::<f64, LANES>::from_slice(&a[i..]);
+        let vb = Simd::<f64, LANES>::from_slice(&b[i..]);
+        let vc = Simd::<f64, LANES>::from_slice(&c[i..]);
+        
+        let result = va.mul_add(vb, vc);
+        result.copy_to_slice(&mut out[i..]);
+    }
+}
+```
+
+## See Also
+
+- [Skyscraper Optimization](/advanced/skyscraper) - Field arithmetic optimizations
+- [FFI Bindings](/advanced/ffi-bindings) - Memory management in FFI

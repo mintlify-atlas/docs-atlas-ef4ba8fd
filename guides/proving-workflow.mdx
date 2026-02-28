@@ -1,0 +1,199 @@
+---
+title: Proving Workflow
+description: Complete workflow for generating and verifying zero-knowledge proofs with ProveKit
+---
+
+This guide walks through the complete proving workflow in ProveKit, from compiling a Noir circuit to verifying the generated proof.
+
+## Overview
+
+The ProveKit proving workflow consists of four main steps:
+
+1. **Compile** - Compile your Noir circuit using `nargo`
+2. **Prepare** - Generate prover and verifier files from the compiled circuit
+3. **Prove** - Generate a proof using witness inputs
+4. **Verify** - Verify the generated proof
+
+## Prerequisites
+
+Before starting, ensure you have:
+
+- Noir toolchain installed (v1.0.0-beta.11)
+- ProveKit CLI built (`cargo build --release --bin provekit-cli`)
+- A Noir circuit to work with
+
+<Tip>
+You can find example circuits in the `noir-examples/` directory, such as `poseidon-rounds`, `sha256`, or `p256_std`.
+</Tip>
+
+## Complete Workflow
+
+<Steps>
+  <Step title="Compile the Noir Circuit">
+    Navigate to your circuit directory and compile it using `nargo`:
+
+    ```bash
+    cd noir-examples/poseidon-rounds
+    nargo compile
+    ```
+
+    This generates a compiled circuit file at `./target/basic.json` containing the R1CS constraints and circuit metadata.
+  </Step>
+
+  <Step title="Prepare Prover and Verifier Files">
+    Use the `prepare` command to generate the prover key (`.pkp`) and verifier key (`.pkv`) files:
+
+    ```bash
+    cargo run --release --bin provekit-cli prepare \
+      ./target/basic.json \
+      --pkp ./prover.pkp \
+      --pkv ./verifier.pkv
+    ```
+
+    **Generated Files:**
+    - `prover.pkp` - Prover key package containing the proving parameters
+    - `verifier.pkv` - Verifier key package containing the verification parameters
+
+    <Note>
+    The `.pkp` file contains preprocessed circuit data needed for proof generation, while the `.pkv` file contains parameters for verification. These files can be reused for multiple proofs of the same circuit.
+    </Note>
+  </Step>
+
+  <Step title="Generate the Proof">
+    Create a proof using the prover key and witness inputs from your `Prover.toml` file:
+
+    ```bash
+    cargo run --release --bin provekit-cli prove \
+      ./prover.pkp \
+      ./Prover.toml \
+      -o ./proof.np
+    ```
+
+    The proof is saved to `proof.np` (Noir Proof format).
+
+    **Example Prover.toml:**
+    ```toml
+    plains = [1, 2]
+    result = '0x0b5b6e4be36ffe606c2f640d972634fcf030bd0346eadcec12d0e3b95bf7f523'
+    ```
+  </Step>
+
+  <Step title="Verify the Proof">
+    Verify the generated proof using the verifier key:
+
+    ```bash
+    cargo run --release --bin provekit-cli verify \
+      ./verifier.pkv \
+      ./proof.np
+    ```
+
+    If verification succeeds, you'll see a success message. If it fails, an error will be displayed.
+  </Step>
+</Steps>
+
+## File Formats
+
+### .pkp (Prover Key Package)
+
+The prover key package contains:
+- Preprocessed circuit constraints
+- Proving parameters
+- Circuit metadata
+
+You can analyze the structure and size breakdown using:
+
+```bash
+cargo run --release --bin provekit-cli analyze-pkp ./prover.pkp
+```
+
+### .pkv (Verifier Key Package)
+
+The verifier key package contains:
+- Verification parameters
+- Public input metadata
+- Circuit commitment data
+
+### .np (Noir Proof)
+
+The proof file contains:
+- The zero-knowledge proof
+- Public inputs
+- Proof metadata
+
+You can inspect public inputs with variable names using:
+
+```bash
+cargo run --release --bin provekit-cli show-inputs \
+  ./verifier.pkv \
+  ./proof.np
+```
+
+## Additional Commands
+
+### Analyze Circuit Statistics
+
+View circuit complexity and R1CS statistics:
+
+```bash
+cargo run --release --bin provekit-cli circuit_stats ./target/basic.json
+```
+
+### Generate Gnark Inputs
+
+Prepare inputs for recursive verification in Gnark:
+
+```bash
+cargo run --release --bin provekit-cli generate-gnark-inputs \
+  ./prover.pkp \
+  ./proof.np
+```
+
+This outputs files needed for the recursive verifier in the `recursive-verifier/` directory.
+
+## Real-World Example: Poseidon Rounds
+
+Here's a complete example using the `poseidon-rounds` circuit, which performs 1000 rounds of Poseidon2 hashing:
+
+```bash poseidon-rounds/src/main.nr
+use dep::poseidon2;
+
+fn main(plains: [Field; 2], result: Field) {
+    let mut hash = poseidon2::bn254::hash_2(plains);
+    let rounds = 1000;
+    for _ in 0..rounds {
+        hash = poseidon2::bn254::hash_1([hash]);
+    }
+    assert(hash == result);
+}
+```
+
+**Complete workflow:**
+
+```bash
+# Compile
+cd noir-examples/poseidon-rounds
+nargo compile
+
+# Prepare
+cargo run --release --bin provekit-cli prepare \
+  ./target/basic.json \
+  --pkp ./prover.pkp \
+  --pkv ./verifier.pkv
+
+# Prove
+cargo run --release --bin provekit-cli prove \
+  ./prover.pkp \
+  ./Prover.toml \
+  -o ./proof.np
+
+# Verify
+cargo run --release --bin provekit-cli verify \
+  ./verifier.pkv \
+  ./proof.np
+```
+
+## Next Steps
+
+- Learn about [Recursive Verification](/guides/recursive-verification) with Gnark
+- See how to [Benchmark](/guides/benchmarking) your proofs against Barretenberg
+- Optimize performance using [Profiling](/guides/profiling) tools

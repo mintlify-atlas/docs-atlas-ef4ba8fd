@@ -1,0 +1,146 @@
+---
+title: Introduction
+description: ProveKit is a modular zero-knowledge proof toolkit optimized for mobile devices, enabling efficient ZK proofs on resource-constrained platforms.
+---
+
+# Introduction
+
+ProveKit is a modular zero-knowledge proof toolkit optimized for mobile devices. Built with performance and portability in mind, it enables efficient zero-knowledge proofs on resource-constrained platforms including iOS, Android, and embedded systems.
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Get started with ProveKit by installing Rust, Noir toolchain, and building from source
+  </Card>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Learn the complete workflow from compiling circuits to generating and verifying proofs
+  </Card>
+  <Card title="API reference" icon="code" href="/api/prover">
+    Explore the complete API documentation for all ProveKit modules
+  </Card>
+  <Card title="Examples" icon="flask" href="/examples/basic">
+    Browse example circuits including Poseidon2, SHA256, and passport verification
+  </Card>
+</CardGroup>
+
+## Key features
+
+ProveKit is designed to bring zero-knowledge proofs to mobile and resource-constrained environments:
+
+### Mobile-first optimization
+
+Optimized field arithmetic for M31/CM31 fields with performance-critical paths written in highly optimized Rust. The toolkit is specifically designed to run efficiently on ARM processors commonly found in mobile devices.
+
+### Modular architecture
+
+Clean separation of concerns across core modules:
+
+- **Common** - Shared utilities, core types, and R1CS abstractions
+- **R1CS compiler** - R1CS compilation logic and Noir integration
+- **Prover** - Proving functionality with witness generation
+- **Verifier** - Verification functionality
+
+### Cross-platform support
+
+C-compatible FFI bindings enable integration with multiple programming languages:
+
+- **Mobile**: iOS (Swift), Android (Kotlin/Java)
+- **Desktop**: macOS, Linux, Windows
+- **Web**: WebAssembly support
+- **Embedded**: ARM-based embedded systems
+
+### Noir language integration
+
+Seamless integration with the Noir programming language for writing zero-knowledge circuits. Compile your Noir programs and generate proofs using ProveKit's optimized proving system.
+
+### Rich tooling ecosystem
+
+- **CLI tool** - Command-line interface for all operations
+- **Benchmarking** - Performance testing infrastructure
+- **Gnark integration** - Recursive verification using Gnark
+- **Verifier server** - REST API for remote verification
+
+## Architecture overview
+
+ProveKit follows a layered architecture that separates concerns and enables flexible deployment:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   Applications Layer                     │
+│  Mobile Apps • Desktop Tools • Web Services • Embedded   │
+└─────────────────────────────────────────────────────────┘
+                           |
+┌─────────────────────────────────────────────────────────┐
+│                    Tooling Layer                        │
+│     CLI • FFI Bindings • Benchmarks • Gnark Bridge     │
+└─────────────────────────────────────────────────────────┘
+                           |
+┌─────────────────────────────────────────────────────────┐
+│                     Core Layer                          │
+│   Common • R1CS Compiler • Prover • Verifier           │
+└─────────────────────────────────────────────────────────┘
+                           |
+┌─────────────────────────────────────────────────────────┐
+│              High-Performance Components                │
+│    Skyscraper (Field Arithmetic) • NTT • WHIR          │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Core modules
+
+The core proving system is split into focused, composable modules:
+
+<CodeGroup>
+```text Core modules
+provekit/
+├── common/          # Shared types and R1CS abstractions
+├── r1cs-compiler/   # Noir circuit compilation
+├── prover/          # Witness generation and proving
+└── verifier/        # Proof verification
+```
+
+```text Tooling
+tooling/
+├── cli/             # Command-line interface
+├── provekit-bench/  # Benchmarking suite
+├── provekit-ffi/    # C FFI bindings
+├── provekit-gnark/  # Gnark integration
+└── verifier-server/ # REST API server
+```
+
+```text High-performance
+skyscraper/          # Optimized field arithmetic
+ntt/                # Number theoretic transforms
+recursive-verifier/ # Gnark-based recursive verification
+```
+</CodeGroup>
+
+## Use cases
+
+ProveKit enables a wide range of privacy-preserving applications:
+
+### Identity verification
+
+Prove claims about identity documents (passports, national IDs) without revealing sensitive information. The `noir-passport` examples demonstrate age verification and data integrity checks.
+
+### Privacy-preserving authentication
+
+Implement zero-knowledge authentication schemes using EdDSA signatures with Poseidon2 hashing, enabling privacy-preserving login systems.
+
+### Cryptographic protocols
+
+Build advanced cryptographic protocols including OPRFs (Oblivious Pseudorandom Functions), commitment schemes, and Merkle tree proofs.
+
+### Mobile applications
+
+Deploy zero-knowledge proofs directly on mobile devices for offline verification, privacy-preserving payments, and secure credential management.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Install ProveKit" icon="download" href="/installation">
+    Set up your development environment
+  </Card>
+  <Card title="Build your first proof" icon="rocket" href="/quickstart">
+    Follow the quick start guide
+  </Card>
+</CardGroup>

@@ -1,0 +1,124 @@
+---
+title: "Recursive Verifier Overview"
+description: "Command-line and HTTP server for recursive verification of zero-knowledge proofs using WHIR"
+---
+
+## What is Recursive Verification?
+
+The Recursive Verifier is a command-line and HTTP server application that performs recursive verification of zero-knowledge proofs using [WHIR](https://eprint.iacr.org/2024/1586.pdf). It allows you to verify proofs generated from constraint systems (R1CS) with configurable circuit parameters.
+
+Recursive verification enables you to verify a proof of another proof, creating a chain of verification that can be used to compress multiple proofs into a single proof or to verify proofs in resource-constrained environments.
+
+## Key Features
+
+- **CLI Interface**: Verify proofs directly from the command line
+- **HTTP API**: Integrate proof verification into your applications via REST API
+- **Flexible Key Management**: Use trusted setup keys or generate them on-demand
+- **URL-based Inputs**: Load R1CS files and keys from public URLs
+- **WHIR Protocol**: Uses the efficient WHIR zero-knowledge proof system
+
+## CLI Usage
+
+Run the recursive verifier from the command line:
+
+```bash
+go run cmd/cli/main.go [flags]
+```
+
+### Example
+
+```bash
+go run cmd/cli/main.go \
+  --config ./params_for_recursive_verifier \
+  --r1cs ./r1cs.json \
+  --pk ./proving_key.bin \
+  --vk ./verifying_key.bin
+```
+
+## CLI Flags
+
+### Required Configuration
+
+<ParamField path="--config" type="string">
+  Path to the JSON configuration file containing verifier circuit parameters.
+  
+  Default: `../noir-examples/poseidon-rounds/params_for_recursive_verifier`
+</ParamField>
+
+### R1CS Input
+
+<ParamField path="--r1cs" type="string">
+  Path to the R1CS JSON file describing the constraint system of the inner circuit.
+  
+  Default: `../noir-examples/poseidon-rounds/r1cs.json`
+</ParamField>
+
+<ParamField path="--r1cs_url" type="string">
+  Optional publicly downloadable URL to the R1CS file. Takes precedence over `--r1cs` if both are provided.
+</ParamField>
+
+### Proving and Verifying Keys
+
+<ParamField path="--pk" type="string">
+  Optional path to load the Proving Key (PK) that will be used to generate proof for the verifier circuit.
+  
+  If not provided, PK will be generated unsafely.
+</ParamField>
+
+<ParamField path="--vk" type="string">
+  Optional path to load the Verifying Key (VK) that will be used to prove the verifier circuit.
+  
+  If not provided, VK will be generated unsafely.
+</ParamField>
+
+<ParamField path="--pk_url" type="string">
+  Optional publicly downloadable URL to the proving key. Must be used with `--vk_url`.
+</ParamField>
+
+<ParamField path="--vk_url" type="string">
+  Optional publicly downloadable URL to the verifying key. Must be used with `--pk_url`.
+</ParamField>
+
+### Output Options
+
+<ParamField path="--ccs" type="string">
+  Optional path to store the constraint system object of the verifier circuit.
+  
+  If empty, the constraint system will not be serialized.
+</ParamField>
+
+<ParamField path="--saveKeys" type="string">
+  Optional path to save generated keys to files.
+</ParamField>
+
+## Key Management
+
+The verifier supports multiple ways to provide proving and verifying keys:
+
+1. **From Local Files**: Use `--pk` and `--vk` flags with file paths
+2. **From URLs**: Use `--pk_url` and `--vk_url` flags with publicly accessible URLs
+3. **Generate Unsafely**: If no keys are provided, the verifier will generate them on-the-fly (not recommended for production)
+
+<Warning>
+  Keys generated without proper setup (when no PK/VK is provided) are unsafe for production use. Always use keys from a trusted setup ceremony for production deployments.
+</Warning>
+
+## R1CS Input Options
+
+You can provide the R1CS constraint system in two ways:
+
+1. **Local File**: Use the `--r1cs` flag with a path to a JSON file
+2. **Remote URL**: Use the `--r1cs_url` flag with a publicly accessible URL
+
+If both are provided, the URL takes precedence.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="HTTP API" icon="globe" href="/recursive-verifier/http-api">
+    Learn how to use the HTTP server for proof verification
+  </Card>
+  <Card title="ProveKit API" icon="code" href="/api/prover">
+    Integrate recursive verification into your application
+  </Card>
+</CardGroup>

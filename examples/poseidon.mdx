@@ -1,0 +1,285 @@
+---
+title: 'Poseidon Hash Rounds'
+description: 'Iterative Poseidon2 hashing with multiple rounds'
+---
+
+This example demonstrates iterative Poseidon2 hashing by performing multiple rounds of hash computations. It showcases how to create circuits with loops and demonstrates the efficiency of Poseidon2 for repeated operations.
+
+## Circuit Overview
+
+The circuit takes two field elements, computes their Poseidon2 hash, then repeatedly hashes the result for a specified number of rounds (1000 iterations by default).
+
+## Circuit Code
+
+Here's the complete circuit from `noir-examples/poseidon-rounds/src/main.nr`:
+
+```noir
+use dep::poseidon2;
+
+fn main(plains: [Field; 2], result: Field) {
+    let mut hash = poseidon2::bn254::hash_2(plains);
+    let rounds = 1000;
+    for _ in 0..rounds {
+        hash = poseidon2::bn254::hash_1([hash]);
+    }
+    println(hash);
+    assert(hash == result);
+}
+```
+
+### What This Circuit Does
+
+1. **Initial Hash**: Computes `hash = H(plains[0], plains[1])` using `hash_2`
+2. **Iterative Hashing**: Performs 1000 rounds of `hash = H(hash)` using `hash_1`
+3. **Accumulation**: Each round uses the previous hash as input
+4. **Verification**: Asserts the final hash matches the expected result
+5. **Output**: Prints the final hash value
+
+## Input Configuration
+
+The `Prover.toml` file includes inputs and expected outputs for different round counts:
+
+```toml
+plains = [1, 2]
+
+# Value for 100 rounds
+# result = '0x0b50a50fda9459e4eda4b0e9382fcbb5d00c6b387bd6b79b9efb3ff95c2a32b6'
+
+# Value for 1000 rounds
+result = '0x0b5b6e4be36ffe606c2f640d972634fcf030bd0346eadcec12d0e3b95bf7f523'
+
+# Value for 10000 rounds
+# result = '0x235d6e083cc444e44782af67ba6be6e9b358e24a52188aea85c5643e3aab9125'
+```
+
+- **plains**: Initial values `[1, 2]`
+- **result**: Expected hash after 1000 rounds
+- Comments show results for 100 and 10,000 rounds
+
+## Complete Workflow
+
+### 1. Compile the Circuit
+
+Compile the circuit with loop unrolling:
+
+```bash
+nargo compile
+```
+
+The compiler will unroll the 1000-iteration loop, creating a larger circuit. This produces:
+- Expanded circuit bytecode
+- More constraints (one hash per round)
+- Optimized circuit structure
+
+### 2. Prepare Proving System
+
+Generate keys for the circuit:
+
+```bash
+provekit prepare poseidon-rounds
+```
+
+Expected output:
+```
+Preparing circuit: poseidon-rounds
+Circuit contains ~1000 hash operations
+Generating proving key... (this may take longer due to circuit size)
+Generating verification key...
+Preparation complete
+```
+
+### 3. Generate Proof
+
+Create a proof for 1000 rounds:
+
+```bash
+provekit prove poseidon-rounds
+```
+
+Expected output:
+```
+Generating proof for: poseidon-rounds
+Executing 1000 hash rounds...
+Round 1: 0x...
+Round 1000: 0x0b5b6e4be36ffe606c2f640d972634fcf030bd0346eadcec12d0e3b95bf7f523
+Proof generated successfully
+```
+
+### 4. Verify Proof
+
+Verify the computation:
+
+```bash
+provekit verify poseidon-rounds proof.json
+```
+
+The verifier confirms 1000 rounds were computed correctly without re-executing them.
+
+## Testing Different Round Counts
+
+### 100 Rounds
+
+Modify the circuit to use 100 rounds:
+
+```noir
+let rounds = 100;
+```
+
+Update `Prover.toml`:
+```toml
+result = '0x0b50a50fda9459e4eda4b0e9382fcbb5d00c6b387bd6b79b9efb3ff95c2a32b6'
+```
+
+Recompile and prove.
+
+### 10,000 Rounds
+
+For 10,000 rounds:
+
+```noir
+let rounds = 10000;
+```
+
+Update `Prover.toml`:
+```toml
+result = '0x235d6e083cc444e44782af67ba6be6e9b358e24a52188aea85c5643e3aab9125'
+```
+
+Note: More rounds = larger circuit = longer proving time.
+
+## Performance Characteristics
+
+### Circuit Size
+
+- **100 rounds**: ~100 Poseidon2 constraints
+- **1000 rounds**: ~1000 Poseidon2 constraints
+- **10,000 rounds**: ~10,000 Poseidon2 constraints
+
+### Proving Time
+
+Approximate proving times (hardware dependent):
+
+| Rounds | Constraints | Proving Time |
+|--------|-------------|-------------|
+| 100    | ~100        | under 1 second   |
+| 1,000  | ~1,000      | ~2 seconds  |
+| 10,000 | ~10,000     | ~20 seconds |
+
+### Why Poseidon2 is Efficient
+
+Poseidon2 is optimized for zero-knowledge proofs:
+- **Fewer Constraints**: ~50-100 constraints per hash
+- **Native Operations**: Uses field arithmetic directly
+- **No Bit Operations**: Avoids expensive bit decomposition
+
+Compare to SHA-256: ~25,000 constraints per hash!
+
+## Use Cases
+
+### Proof of Work
+Prove you performed N hash iterations without revealing intermediate values:
+```noir
+// Prove you computed 10,000 hash rounds
+let rounds = 10000;
+```
+
+### Chain of Custody
+Verify a sequence of transformations:
+```noir
+// Each round represents a state transition
+for i in 0..checkpoints {
+    state = hash_transition(state);
+}
+```
+
+### Rate Limiting
+Prove time-based computation:
+```noir
+// Prove you waited N time periods
+let time_periods = 1000;
+```
+
+## Key Concepts
+
+### Loop Unrolling
+
+Noir unrolls loops at compile time:
+```noir
+for _ in 0..1000 {
+    hash = poseidon2::bn254::hash_1([hash]);
+}
+```
+
+Becomes 1000 sequential hash operations in the circuit.
+
+### Hash Function Variants
+
+Poseidon2 provides multiple input sizes:
+- `hash_1([Field; 1])` - Single field element
+- `hash_2([Field; 2])` - Two field elements
+- `hash_4([Field; 4])` - Four field elements
+- `hash_8([Field; 8])` - Eight field elements
+- `hash_12([Field; 12])` - Twelve field elements
+- `hash_16([Field; 16])` - Sixteen field elements
+
+### Mutable Variables
+
+Note the `mut` keyword:
+```noir
+let mut hash = initial_value;
+```
+
+Required for variables that change in loops.
+
+## Advanced Variations
+
+### Variable Round Count
+
+Make rounds configurable:
+```noir
+fn main(plains: [Field; 2], rounds: Field, result: Field) {
+    let mut hash = poseidon2::bn254::hash_2(plains);
+    for _ in 0..rounds {
+        hash = poseidon2::bn254::hash_1([hash]);
+    }
+    assert(hash == result);
+}
+```
+
+### Parallel Chains
+
+Multiple independent hash chains:
+```noir
+let mut hash1 = poseidon2::bn254::hash_2([plains[0], plains[1]]);
+let mut hash2 = poseidon2::bn254::hash_2([plains[2], plains[3]]);
+
+for _ in 0..rounds {
+    hash1 = poseidon2::bn254::hash_1([hash1]);
+    hash2 = poseidon2::bn254::hash_1([hash2]);
+}
+```
+
+### Merkle Tree Construction
+
+Use iterative hashing for tree levels:
+```noir
+// Hash pairs up the tree
+let mut level = leaves;
+for _ in 0..tree_height {
+    level = hash_level(level);
+}
+```
+
+## Next Steps
+
+- Experiment with different round counts
+- Measure proving time vs circuit size
+- Try parallel hash chains
+- Implement a Merkle tree using iterative hashing
+- Compare with [SHA-256 example](/examples/sha256)
+
+## Related Examples
+
+- [Basic Circuit](/examples/basic) - Simple single hash
+- [SHA-256](/examples/sha256) - Alternative hash function
+- [EdDSA Signatures](/examples/eddsa) - Uses Poseidon2 internally

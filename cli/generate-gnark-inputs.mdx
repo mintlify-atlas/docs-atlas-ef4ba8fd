@@ -1,0 +1,310 @@
+---
+title: generate-gnark-inputs
+description: Generate inputs compatible with gnark recursive verifier
+---
+
+The `generate-gnark-inputs` command generates the necessary input files for verifying ProveKit proofs in a gnark-based recursive verifier.
+
+## Command Syntax
+
+```bash
+provekit-cli generate-gnark-inputs <prover_path> <proof_path> [OPTIONS]
+```
+
+## Arguments
+
+<ParamField path="prover_path" type="string" required>
+  Path to the compiled Noir program (PKP file)
+</ParamField>
+
+<ParamField path="proof_path" type="string" required>
+  Path to the proof file
+</ParamField>
+
+## Options
+
+<ParamField path="--proof" type="string" default="./proof_for_recursive_verifier">
+  Output path for the proof file in gnark format
+</ParamField>
+
+<ParamField path="--params" type="string" default="./params_for_recursive_verifier">
+  Output path for the parameters file for gnark
+</ParamField>
+
+<ParamField path="--r1cs" type="string" default="./r1cs.json">
+  Output path for the R1CS file in JSON format
+</ParamField>
+
+## Output Files
+
+The command generates three files:
+
+1. **Proof file** (`proof_for_recursive_verifier`): Proof data formatted for gnark
+2. **Parameters file** (`params_for_recursive_verifier`): WHIR parameters and commitments
+3. **R1CS file** (`r1cs.json`): R1CS constraint system in JSON format
+
+## Examples
+
+### Basic Usage
+
+Generate gnark inputs with default output paths:
+
+```bash
+provekit-cli generate-gnark-inputs noir_proof_scheme.pkp proof.np
+```
+
+This creates:
+- `proof_for_recursive_verifier`
+- `params_for_recursive_verifier`
+- `r1cs.json`
+
+### Custom Output Paths
+
+Specify custom output locations:
+
+```bash
+provekit-cli generate-gnark-inputs scheme.pkp proof.np \
+  --proof ./gnark/proof.bin \
+  --params ./gnark/params.bin \
+  --r1cs ./gnark/r1cs.json
+```
+
+### Complete Recursive Verification Workflow
+
+```bash
+# 1. Prepare the circuit
+provekit-cli prepare circuit.json
+
+# 2. Generate a proof
+provekit-cli prove noir_proof_scheme.pkp inputs.toml
+
+# 3. Verify with ProveKit (sanity check)
+provekit-cli verify noir_proof_scheme.pkv proof.np
+
+# 4. Generate gnark-compatible inputs
+provekit-cli generate-gnark-inputs noir_proof_scheme.pkp proof.np
+
+# 5. Use gnark to recursively verify (in your gnark application)
+# go run main.go proof_for_recursive_verifier params_for_recursive_verifier r1cs.json
+```
+
+## What's in Each File
+
+### Proof File (Binary)
+
+Contains:
+- WHIR R1CS proof data
+- Formatted for gnark consumption
+- Binary format (not human-readable)
+
+### Parameters File (Binary)
+
+Contains:
+- Blinded witness commitment
+- WHIR proof parameters:
+  - `m_0`: Initial folding parameter
+  - `m`: Folding parameter
+  - `a_num_terms`: Number of terms in polynomial A
+  - `num_challenges`: Number of Fiat-Shamir challenges
+  - `w1_size`: Size of first witness split
+- Public inputs
+- Binary format
+
+### R1CS File (JSON)
+
+Contains the R1CS constraint system:
+```json
+{
+  "interner": { /* variable names */ },
+  "a": { /* matrix A */ },
+  "b": { /* matrix B */ },
+  "c": { /* matrix C */ },
+  "num_constraints": 1234,
+  "num_witnesses": 567,
+  "num_public_inputs": 4
+}
+```
+
+This file is human-readable and can be inspected.
+
+## Use Cases
+
+### Recursive Proof Verification
+
+The primary use case: verify a ProveKit proof inside another ZK circuit:
+
+```go
+// In your gnark circuit
+func (circuit *RecursiveCircuit) Define(api frontend.API) error {
+    // Load ProveKit proof parameters
+    params := LoadParams("params_for_recursive_verifier")
+    proof := LoadProof("proof_for_recursive_verifier")  
+    r1cs := LoadR1CS("r1cs.json")
+    
+    // Verify the ProveKit proof inside this circuit
+    return VerifyProveKitProof(api, params, proof, r1cs)
+}
+```
+
+### Proof Aggregation
+
+Generate inputs for multiple proofs to aggregate:
+
+```bash
+# Generate inputs for multiple proofs
+provekit-cli generate-gnark-inputs scheme.pkp proof1.np --proof proof1.bin --params params1.bin
+provekit-cli generate-gnark-inputs scheme.pkp proof2.np --proof proof2.bin --params params2.bin
+provekit-cli generate-gnark-inputs scheme.pkp proof3.np --proof proof3.bin --params params3.bin
+
+# Aggregate in gnark (in your gnark application)
+```
+
+### Bridge to Other Proof Systems
+
+Use gnark as a bridge to other ecosystems:
+- Generate ProveKit proof
+- Convert to gnark format
+- Verify in gnark circuit
+- Generate Groth16/PLONK proof for Ethereum
+
+## Understanding WHIR Parameters
+
+The parameters file includes WHIR-specific values:
+
+<ResponseField name="m_0" type="number">
+  Initial folding parameter - controls first round of proof reduction
+</ResponseField>
+
+<ResponseField name="m" type="number">
+  Folding parameter - controls subsequent rounds of proof reduction
+</ResponseField>
+
+<ResponseField name="a_num_terms" type="number">
+  Number of terms in polynomial A - determines constraint complexity
+</ResponseField>
+
+<ResponseField name="num_challenges" type="number">
+  Number of Fiat-Shamir challenges - security parameter
+</ResponseField>
+
+<ResponseField name="w1_size" type="number">
+  Size of first witness split - affects memory and computation distribution
+</ResponseField>
+
+These parameters are automatically determined during circuit preparation and must match between prover and verifier.
+
+## R1CS JSON Format
+
+The R1CS JSON file is structured for easy parsing:
+
+```json
+{
+  "interner": {
+    "variables": ["one", "x", "y", "z", ...]
+  },
+  "a": {
+    "rows": [...],
+    "cols": [...],
+    "vals": [...]
+  },
+  "b": { /* similar to a */ },
+  "c": { /* similar to a */ },
+  "num_constraints": 1234,
+  "num_witnesses": 567,  
+  "num_public_inputs": 4
+}
+```
+
+Matrices use compressed sparse row (CSR) format.
+
+## Expected Output
+
+During generation, you'll see logging:
+
+```
+Read Noir proof scheme: constraints=1234, witnesses=567
+```
+
+Successful generation produces no error output and returns exit code 0.
+
+## Performance Considerations
+
+- Reads both PKP and proof files
+- Serializes R1CS to JSON (can be slow for large circuits)
+- JSON output is pretty-printed (human-readable but larger)
+- Output files are not compressed
+
+<Note>
+For very large circuits (100k+ constraints), R1CS JSON generation may take several seconds.
+</Note>
+
+## Integration with gnark
+
+Typical gnark integration:
+
+```go
+package main
+
+import (
+    "encoding/json"
+    "io/ioutil"
+    "github.com/consensys/gnark/frontend"
+)
+
+type ProveKitVerifier struct {
+    R1CS   R1CSData
+    Params ProofParams  
+    Proof  ProofData
+}
+
+func main() {
+    // Load files generated by ProveKit
+    params := loadParams("params_for_recursive_verifier")
+    proof := loadProof("proof_for_recursive_verifier")
+    r1cs := loadR1CS("r1cs.json")
+    
+    // Create gnark circuit
+    circuit := &ProveKitVerifier{
+        R1CS:   r1cs,
+        Params: params,
+        Proof:  proof,
+    }
+    
+    // Compile and prove
+    // ...
+}
+```
+
+## Troubleshooting
+
+### Large JSON Files
+
+If `r1cs.json` is too large:
+- Use compressed storage
+- Stream parse in your application
+- Consider using binary format instead
+
+### Parameter Mismatches
+
+Ensure parameters match:
+```bash
+# Check WHIR parameters
+provekit-cli analyze-pkp scheme.pkp | grep -i whir
+```
+
+### File Format Issues
+
+If gnark can't parse the files:
+- Verify files were generated completely (check file sizes)
+- Ensure no corruption during transfer
+- Regenerate files if needed
+
+## Limitations
+
+<Warning>
+The gnark integration is designed for specific recursive verification scenarios. Ensure your gnark circuit is compatible with the WHIR proof system used by ProveKit.
+</Warning>
+
+## Source Reference
+
+Implementation: `tooling/cli/src/cmd/generate_gnark_inputs.rs`

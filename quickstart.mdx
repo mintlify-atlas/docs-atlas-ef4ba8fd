@@ -1,80 +1,339 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick start
+description: Learn the complete ProveKit workflow from compiling circuits to generating and verifying zero-knowledge proofs.
 ---
 
-## Get started in three steps
+# Quick start
 
-Get your documentation site running locally and make your first customization.
+This guide walks you through the complete ProveKit workflow using a real example circuit. You'll learn how to compile a Noir circuit, prepare the proving system, generate proofs, and verify them.
 
-### Step 1: Set up your local environment
+## Overview
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+The ProveKit workflow consists of four main steps:
 
-### Step 2: Deploy your changes
+1. **Compile** - Compile your Noir circuit to R1CS format
+2. **Prepare** - Generate prover and verifier files from the compiled circuit
+3. **Prove** - Generate a zero-knowledge proof using witness inputs
+4. **Verify** - Verify the generated proof
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+## Example circuit
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+We'll use the `poseidon-rounds` example, which demonstrates Poseidon2 hash computation with multiple rounds. This circuit:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+- Takes two field elements as input
+- Computes Poseidon2 hash iteratively for 1000 rounds
+- Verifies the final hash matches the expected result
 
-### Step 3: Go live
+<CodeGroup>
+```noir Circuit (main.nr)
+use dep::poseidon2;
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+fn main(plains: [Field; 2], result: Field) {
+    let mut hash = poseidon2::bn254::hash_2(plains);
+    let rounds = 1000;
+    for _ in 0..rounds {
+        hash = poseidon2::bn254::hash_1([hash]);
+    }
+    println(hash);
+    assert(hash == result);
+}
+```
+
+```toml Input (Prover.toml)
+plains = [1, 2]
+
+# Expected result after 1000 rounds
+result = '0x0b5b6e4be36ffe606c2f640d972634fcf030bd0346eadcec12d0e3b95bf7f523'
+```
+</CodeGroup>
+
+## Complete workflow
+
+<Steps>
+  <Step title="Navigate to example directory">
+    Navigate to the `poseidon-rounds` example directory:
+
+    ```bash
+    cd noir-examples/poseidon-rounds
+    ```
+
+    This directory contains:
+    - `src/main.nr` - The Noir circuit
+    - `Prover.toml` - Input values for the prover
+    - `Nargo.toml` - Project configuration
+  </Step>
+
+  <Step title="Compile the Noir circuit">
+    Compile the circuit using `nargo`:
+
+    ```bash
+    nargo compile
+    ```
+
+    Expected output:
+    ```
+    [poseidon-rounds] Compiling...
+    [poseidon-rounds] Generated ACIR opcodes
+    [poseidon-rounds] Saved circuit to ./target/poseidon_rounds.json
+    ```
+
+    This generates the compiled circuit in R1CS format at `target/poseidon_rounds.json`.
+
+    <Tip>
+      The compiled circuit file contains the R1CS constraint system representation of your Noir program. This file is used by ProveKit to generate the proving and verification keys.
+    </Tip>
+  </Step>
+
+  <Step title="Prepare the proving system">
+    Generate prover and verifier files using ProveKit CLI:
+
+    ```bash
+    cargo run --release --bin provekit-cli prepare \
+      ./target/poseidon_rounds.json \
+      --pkp ./prover.pkp \
+      --pkv ./verifier.pkv
+    ```
+
+    This command:
+    - Reads the compiled circuit from `target/poseidon_rounds.json`
+    - Generates the proving key at `prover.pkp`
+    - Generates the verification key at `verifier.pkv`
+
+    Expected output:
+    ```
+    Preparing proving system...
+    Circuit loaded: 45,123 constraints
+    Generating proving key...
+    Generating verification key...
+    Prover key written to ./prover.pkp (2.3 MB)
+    Verifier key written to ./verifier.pkv (128 KB)
+    ```
+
+    <Note>
+      The prepare step only needs to be run once per circuit. You can reuse the generated `.pkp` and `.pkv` files for multiple proofs with different inputs.
+    </Note>
+  </Step>
+
+  <Step title="Generate a proof">
+    Generate a zero-knowledge proof using the witness inputs from `Prover.toml`:
+
+    ```bash
+    cargo run --release --bin provekit-cli prove \
+      ./prover.pkp \
+      ./Prover.toml \
+      -o ./proof.np
+    ```
+
+    This command:
+    - Loads the proving key from `prover.pkp`
+    - Reads witness values from `Prover.toml`
+    - Generates the proof and saves it to `proof.np`
+
+    Expected output:
+    ```
+    Proving...
+    Witness generation: 23ms
+    Proof generation: 1,847ms
+    Proof written to ./proof.np (18.4 KB)
+    ```
+
+    <Tip>
+      Use the `--features profiling` flag to enable memory profiling:
+      ```bash
+      cargo run --release --bin provekit-cli --features profiling prove \
+        ./prover.pkp ./Prover.toml -o ./proof.np
+      ```
+    </Tip>
+  </Step>
+
+  <Step title="Verify the proof">
+    Verify the generated proof:
+
+    ```bash
+    cargo run --release --bin provekit-cli verify \
+      ./verifier.pkv \
+      ./proof.np
+    ```
+
+    This command:
+    - Loads the verification key from `verifier.pkv`
+    - Reads the proof from `proof.np`
+    - Verifies the proof is valid
+
+    Expected output:
+    ```
+    Verifying proof...
+    Proof verification: 47ms
+    ✓ Proof is valid
+    ```
+
+    If verification fails, you'll see:
+    ```
+    ✗ Proof verification failed
+    ```
+  </Step>
+</Steps>
+
+## Additional commands
+
+ProveKit CLI provides several utility commands for circuit analysis and debugging.
+
+### Analyze circuit statistics
+
+View detailed statistics about your circuit's R1CS complexity:
+
+```bash
+cargo run --release --bin provekit-cli circuit_stats \
+  ./target/poseidon_rounds.json
+```
+
+Example output:
+```
+Circuit Statistics:
+  Constraints: 45,123
+  Public inputs: 1
+  Private inputs: 2
+  Gates by type:
+    - Arithmetic: 42,890
+    - Range checks: 2,233
+```
+
+### Analyze PKP file size
+
+Breakdown of the prover key file size:
+
+```bash
+cargo run --release --bin provekit-cli analyze-pkp ./prover.pkp
+```
+
+Example output:
+```
+PKP File Analysis:
+  Total size: 2.3 MB
+  R1CS data: 1.8 MB (78%)
+  Witness template: 412 KB (18%)
+  Metadata: 90 KB (4%)
+```
+
+### Show public inputs
+
+Display public inputs with variable names from a proof:
+
+```bash
+cargo run --release --bin provekit-cli show-inputs \
+  ./verifier.pkv \
+  ./proof.np
+```
+
+Example output:
+```
+Public Inputs:
+  result: 0x0b5b6e4be36ffe606c2f640d972634fcf030bd0346eadcec12d0e3b95bf7f523
+```
+
+### Generate Gnark inputs
+
+Generate inputs for recursive verification in Gnark:
+
+```bash
+cargo run --release --bin provekit-cli generate-gnark-inputs \
+  ./prover.pkp \
+  ./proof.np
+```
+
+This creates the necessary files for recursive verification using the Gnark proving system.
+
+## Benchmarking
+
+Compare ProveKit performance against Barretenberg:
+
+```bash
+# Prepare the circuit
+cargo run --release --bin provekit-cli prepare \
+  ./target/poseidon_rounds.json \
+  --pkp ./prover.pkp \
+  --pkv ./verifier.pkv
+
+# Benchmark with hyperfine
+hyperfine \
+  'nargo execute && bb prove -b ./target/poseidon_rounds.json -w ./target/poseidon_rounds.gz -o ./target' \
+  '../../target/release/provekit-cli prove ./prover.pkp ./Prover.toml'
+```
+
+<Note>
+  Make sure you have [Barretenberg](https://github.com/AztecProtocol/aztec-packages/blob/master/barretenberg/bbup/README.md) and [hyperfine](https://github.com/sharkdp/hyperfine) installed for benchmarking.
+</Note>
+
+## Recursive verification
+
+Verify ProveKit proofs recursively in a Gnark circuit:
+
+```bash
+# Navigate to recursive verifier
+cd ../../recursive-verifier
+
+# Run Gnark recursive verification
+go run cmd/cli/main.go \
+  --config ../noir-examples/poseidon-rounds/params_for_recursive_verifier \
+  --r1cs ../noir-examples/poseidon-rounds/r1cs.json
+```
+
+This enables proof composition and on-chain verification using Gnark's SNARK-friendly proving system.
+
+## Trying other examples
+
+ProveKit includes numerous example circuits to explore:
+
+<CardGroup cols={2}>
+  <Card title="Basic examples" icon="cube">
+    - `basic` - Simple arithmetic circuit
+    - `basic-2` - Multiple constraints
+    - `basic-3` - Complex constraints
+  </Card>
+  
+  <Card title="Cryptographic primitives" icon="key">
+    - `poseidon2` - Poseidon2 permutation
+    - `poseidon-var` - Variable-length Poseidon
+    - `sha256` - SHA256 hashing
+    - `eddsa_poseidon2` - EdDSA signatures
+  </Card>
+  
+  <Card title="Elliptic curves" icon="circle">
+    - `babyjubjub` - BabyJubJub operations
+    - `p256_std` - P-256 using std library
+    - `p256_bigcurve` - P-256 big curve
+  </Card>
+  
+  <Card title="Advanced protocols" icon="shield">
+    - `oprf` - Oblivious PRF
+    - `noir-passport` - Passport verification
+    - `zkchase` - ZK game logic
+  </Card>
+</CardGroup>
+
+To try a different example, simply navigate to its directory and follow the same workflow:
+
+```bash
+cd noir-examples/sha256
+nargo compile
+cargo run --release --bin provekit-cli prepare ./target/sha256.json --pkp ./prover.pkp --pkv ./verifier.pkv
+cargo run --release --bin provekit-cli prove ./prover.pkp ./Prover.toml -o ./proof.np
+cargo run --release --bin provekit-cli verify ./verifier.pkv ./proof.np
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="API reference" icon="code" href="/api/prover">
+    Explore the complete API documentation
+  </Card>
+  <Card title="FFI bindings" icon="mobile" href="/advanced/ffi-bindings">
+    Integrate ProveKit with mobile apps
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+    Understand ProveKit's internal design
+  </Card>
+  <Card title="Examples" icon="flask" href="/examples/basic">
+    Browse all example circuits
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

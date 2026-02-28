@@ -1,0 +1,259 @@
+---
+title: R1CS Compiler API
+description: Compile Noir ACIR circuits to R1CS constraint systems
+---
+
+## Overview
+
+The `provekit_r1cs_compiler` crate compiles Noir's ACIR (Abstract Circuit Intermediate Representation) into R1CS (Rank-1 Constraint System) format. This enables efficient zero-knowledge proof generation using the WHIR protocol.
+
+## Core Functions
+
+### noir_to_r1cs
+
+Compiles a Noir ACIR circuit to an R1CS constraint system.
+
+```rust
+pub fn noir_to_r1cs(
+    circuit: &Circuit<NoirElement>,
+) -> Result<(R1CS, Vec<Option<NonZeroU32>>, Vec<WitnessBuilder>)>
+```
+
+<ParamField path="circuit" type="&Circuit<NoirElement>" required>
+  ACIR circuit from Noir compiler
+</ParamField>
+
+**Returns:**
+- `R1CS` - Constraint system with A, B, C matrices
+- `Vec<Option<NonZeroU32>>` - Map from ACIR witness indices to R1CS witness indices
+- `Vec<WitnessBuilder>` - Instructions for solving witness values
+
+**Example:**
+
+```rust
+use provekit_r1cs_compiler::noir_to_r1cs;
+
+let (r1cs, witness_map, builders) = noir_to_r1cs(&circuit)?;
+
+println!("Constraints: {}", r1cs.num_constraints());
+println!("Witnesses: {}", r1cs.num_witnesses());
+```
+
+### noir_to_r1cs_with_breakdown
+
+Compiles with detailed breakdown of constraint and witness contributions.
+
+```rust
+pub fn noir_to_r1cs_with_breakdown(
+    circuit: &Circuit<NoirElement>,
+) -> Result<(
+    R1CS,
+    Vec<Option<NonZeroU32>>,
+    Vec<WitnessBuilder>,
+    R1CSBreakdown,
+)>
+```
+
+**Returns:** Same as `noir_to_r1cs` plus `R1CSBreakdown` with detailed statistics
+
+**Example:**
+
+```rust
+use provekit_r1cs_compiler::noir_to_r1cs_with_breakdown;
+
+let (r1cs, witness_map, builders, breakdown) = 
+    noir_to_r1cs_with_breakdown(&circuit)?;
+
+println!("AssertZero constraints: {}", breakdown.assert_zero_constraints);
+println!("Memory ROM constraints: {}", breakdown.memory_rom_constraints);
+println!("Binary op constraints: {}", breakdown.binop_constraints);
+println!("Range check constraints: {}", breakdown.range_constraints);
+```
+
+## R1CSBreakdown
+
+Detailed breakdown of constraint and witness counts by circuit component.
+
+```rust
+pub struct R1CSBreakdown {
+    pub assert_zero_constraints: usize,
+    pub assert_zero_witnesses: usize,
+    
+    pub memory_rom_constraints: usize,
+    pub memory_rom_witnesses: usize,
+    pub memory_ram_constraints: usize,
+    pub memory_ram_witnesses: usize,
+    
+    pub binop_constraints: usize,
+    pub binop_witnesses: usize,
+    pub and_ops_total: usize,
+    pub xor_ops_total: usize,
+    pub binop_atomic_width: Option<u32>,
+    
+    pub range_constraints: usize,
+    pub range_witnesses: usize,
+    pub range_ops_total: usize,
+    pub range_base_width: Option<u32>,
+    
+    pub sha256_direct_constraints: usize,
+    pub sha256_direct_witnesses: usize,
+    pub sha256_and_ops: usize,
+    pub sha256_xor_ops: usize,
+    pub sha256_range_ops: usize,
+    pub spread_table_bits: Option<u32>,
+    
+    pub poseidon2_constraints: usize,
+    pub poseidon2_witnesses: usize,
+}
+```
+
+### Fields
+
+<ParamField path="assert_zero_constraints" type="usize">
+  Constraints from ACIR AssertZero opcodes (arithmetic operations)
+</ParamField>
+
+<ParamField path="memory_rom_constraints" type="usize">
+  Constraints for ROM (read-only memory) checking using lookup constraints
+</ParamField>
+
+<ParamField path="memory_ram_constraints" type="usize">
+  Constraints for RAM (read-write memory) using Spice offline memory checking
+</ParamField>
+
+<ParamField path="binop_constraints" type="usize">
+  Constraints for combined AND/XOR binary operations using lookup tables
+</ParamField>
+
+<ParamField path="range_constraints" type="usize">
+  Constraints for batched range checks with digital decomposition
+</ParamField>
+
+<ParamField path="sha256_direct_constraints" type="usize">
+  Direct constraints from SHA256 compression (excluding batched ops)
+</ParamField>
+
+<ParamField path="poseidon2_constraints" type="usize">
+  Constraints from Poseidon2 permutation
+</ParamField>
+
+## Supported ACIR Opcodes
+
+The compiler handles these ACIR opcode types:
+
+### AssertZero
+
+Arithmetic constraints: linear combinations and products of witnesses.
+
+```rust
+Opcode::AssertZero(expr) => {
+    // Creates R1CS constraint: A × B = C
+    // where A, B, C are linear combinations
+}
+```
+
+### BlackBox Functions
+
+#### Range Checks
+
+```rust
+BlackBoxFuncCall::RANGE { input, num_bits } => {
+    // Constrain input ∈ [0, 2^num_bits)
+    // Uses digital decomposition and lookup tables
+}
+```
+
+#### Binary Operations
+
+```rust
+BlackBoxFuncCall::AND { lhs, rhs, output } => {
+    // 32-bit AND: output = lhs & rhs
+    // Decomposed into byte-level lookups
+}
+
+BlackBoxFuncCall::XOR { lhs, rhs, output } => {
+    // 32-bit XOR: output = lhs ⊕ rhs
+}
+```
+
+#### SHA256 Compression
+
+```rust
+BlackBoxFuncCall::Sha256Compression {
+    inputs,
+    hash_values,
+    outputs,
+} => {
+    // SHA256 compression function
+    // Uses spread-based bit operations
+}
+```
+
+#### Poseidon2
+
+```rust
+BlackBoxFuncCall::Poseidon2Permutation {
+    inputs,
+    outputs,
+    len,
+} => {
+    // Poseidon2 permutation
+    // Supports widths: 2, 3, 4, 8, 12, 16
+}
+```
+
+### Memory Operations
+
+```rust
+Opcode::MemoryInit { block_id, init, block_type } => {
+    // Initialize ROM/RAM block
+}
+
+Opcode::MemoryOp { block_id, op, predicate } => {
+    // Dynamic memory read/write
+    // ROM uses lookup constraints
+    // RAM uses Spice memory checking
+}
+```
+
+## Optimization Techniques
+
+### Lookup Tables
+
+- **Binary Operations**: Combined AND/XOR table with optimal atomic width
+- **Range Checks**: Digital decomposition with optimal base width
+- **SHA256**: Spread tables with configurable bit width
+
+### Memory Efficiency
+
+- **Coefficient Interning**: Deduplicates repeated field elements
+- **Sparse Matrices**: Efficient storage for R1CS matrices
+- **Product Caching**: Reuses product witnesses
+
+### Example
+
+```rust
+use provekit_r1cs_compiler::{noir_to_r1cs_with_breakdown, R1CSBreakdown};
+
+let (r1cs, witness_map, builders, breakdown) = 
+    noir_to_r1cs_with_breakdown(&circuit)?;
+
+// Analyze circuit composition
+let total_constraints = r1cs.num_constraints();
+let arithmetic_pct = (breakdown.assert_zero_constraints * 100) / total_constraints;
+let memory_pct = ((breakdown.memory_rom_constraints + 
+                   breakdown.memory_ram_constraints) * 100) / total_constraints;
+
+println!("Circuit composition:");
+println!("  Arithmetic: {}%", arithmetic_pct);
+println!("  Memory: {}%", memory_pct);
+
+if let Some(width) = breakdown.binop_atomic_width {
+    println!("  Binary op table: {} bits", width);
+}
+```
+
+## Source Reference
+
+- Main compiler: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:112-136`
+- Exports: `provekit/r1cs-compiler/src/lib.rs:14-18`

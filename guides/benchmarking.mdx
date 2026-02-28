@@ -1,0 +1,332 @@
+---
+title: Benchmarking
+description: Benchmark ProveKit performance against Barretenberg and other proving systems
+---
+
+Benchmarking helps you measure and compare the performance of ProveKit against other proving systems, particularly Barretenberg. This guide shows you how to run benchmarks and interpret results.
+
+## Overview
+
+ProveKit provides multiple ways to benchmark performance:
+
+1. **CLI Benchmarks** - Compare prove/verify times against Barretenberg using `hyperfine`
+2. **Benchmark Suite** - Run the internal benchmark suite with `cargo test`
+3. **Custom Benchmarks** - Write your own benchmarks for specific circuits
+
+## Prerequisites
+
+### Install Barretenberg
+
+Barretenberg is Aztec's proving system. Install it using `bbup`:
+
+```bash
+bash <(curl -sS https://raw.githubusercontent.com/AztecProtocol/aztec-packages/master/barretenberg/bbup/install.sh)
+bbup
+```
+
+Verify installation:
+
+```bash
+bb --version
+```
+
+<Tip>
+See the [Barretenberg bbup README](https://github.com/AztecProtocol/aztec-packages/blob/master/barretenberg/bbup/README.md) for detailed installation instructions.
+</Tip>
+
+### Install Hyperfine
+
+Hyperfine is a command-line benchmarking tool that provides statistical analysis:
+
+**macOS:**
+```bash
+brew install hyperfine
+```
+
+**Linux:**
+```bash
+cargo install hyperfine
+# or
+wget https://github.com/sharkdp/hyperfine/releases/download/v1.18.0/hyperfine_1.18.0_amd64.deb
+sudo dpkg -i hyperfine_1.18.0_amd64.deb
+```
+
+**Windows:**
+```bash
+scoop install hyperfine
+```
+
+## Benchmarking Against Barretenberg
+
+<Steps>
+  <Step title="Prepare Your Circuit">
+    Navigate to a Noir example and compile it:
+
+    ```bash
+    cd noir-examples/poseidon-rounds
+    nargo compile
+    ```
+  </Step>
+
+  <Step title="Generate ProveKit Files">
+    Prepare the prover and verifier keys:
+
+    ```bash
+    cargo run --release --bin provekit-cli prepare \
+      ./target/basic.json \
+      --pkp ./prover.pkp \
+      --pkv ./verifier.pkv
+    ```
+  </Step>
+
+  <Step title="Run Benchmark">
+    Use `hyperfine` to compare prove times:
+
+    ```bash
+    hyperfine \
+      'nargo execute && bb prove -b ./target/basic.json -w ./target/basic.gz -o ./target' \
+      '../../target/release/provekit-cli prove ./prover.pkp ./Prover.toml'
+    ```
+
+    This runs both provers multiple times and provides statistical analysis.
+  </Step>
+</Steps>
+
+## Understanding Hyperfine Output
+
+Hyperfine provides detailed statistics:
+
+```
+Benchmark 1: nargo execute && bb prove -b ./target/basic.json -w ./target/basic.gz -o ./target
+  Time (mean ± σ):      2.341 s ±  0.087 s    [User: 2.298 s, System: 0.028 s]
+  Range (min … max):    2.234 s …  2.512 s    10 runs
+ 
+Benchmark 2: ../../target/release/provekit-cli prove ./prover.pkp ./Prover.toml
+  Time (mean ± σ):      1.876 s ±  0.053 s    [User: 1.841 s, System: 0.024 s]
+  Range (min … max):    1.812 s …  1.963 s    10 runs
+ 
+Summary
+  '../../target/release/provekit-cli prove ./prover.pkp ./Prover.toml' ran
+    1.25 ± 0.05 times faster than 'nargo execute && bb prove -b ./target/basic.json -w ./target/basic.gz -o ./target'
+```
+
+**Key Metrics:**
+- **Mean** - Average execution time
+- **σ (Sigma)** - Standard deviation (consistency)
+- **Range** - Min and max times observed
+- **Runs** - Number of iterations
+- **Summary** - Relative performance comparison
+
+## Advanced Benchmarking Options
+
+### Control Number of Runs
+
+```bash
+hyperfine --runs 50 \
+  'nargo execute && bb prove -b ./target/basic.json -w ./target/basic.gz -o ./target' \
+  '../../target/release/provekit-cli prove ./prover.pkp ./Prover.toml'
+```
+
+### Warmup Runs
+
+Ignore the first few runs to account for caching:
+
+```bash
+hyperfine --warmup 3 \
+  'nargo execute && bb prove -b ./target/basic.json -w ./target/basic.gz -o ./target' \
+  '../../target/release/provekit-cli prove ./prover.pkp ./Prover.toml'
+```
+
+### Export Results
+
+Save results in various formats:
+
+```bash
+hyperfine \
+  --export-json benchmark_results.json \
+  --export-markdown benchmark_results.md \
+  'nargo execute && bb prove -b ./target/basic.json -w ./target/basic.gz -o ./target' \
+  '../../target/release/provekit-cli prove ./prover.pkp ./Prover.toml'
+```
+
+### Parameter Sweeps
+
+Benchmark across different input sizes:
+
+```bash
+hyperfine \
+  --parameter-list rounds 100,1000,10000 \
+  '../../target/release/provekit-cli prove ./prover-{rounds}.pkp ./Prover-{rounds}.toml'
+```
+
+## Benchmark Suite
+
+ProveKit includes an internal benchmark suite for detailed performance analysis:
+
+```bash
+cargo test -p provekit-bench --bench bench
+```
+
+This runs benchmarks across multiple circuits and operations, including:
+- Witness generation
+- Proof generation
+- Verification
+- Memory usage
+
+### Benchmark Structure
+
+The benchmark suite is located in `tooling/provekit-bench/` and includes:
+
+- Circuit preparation benchmarks
+- Proving time benchmarks
+- Verification time benchmarks
+- Memory profiling benchmarks
+
+## Benchmarking Verification
+
+Compare verification times:
+
+```bash
+hyperfine \
+  'bb verify -k ./target/vk -p ./target/proof' \
+  '../../target/release/provekit-cli verify ./verifier.pkv ./proof.np'
+```
+
+## Benchmarking Recursive Verification
+
+Measure recursive verification performance:
+
+```bash
+cd recursive-verifier
+
+hyperfine --warmup 1 \
+  'go run cmd/cli/main.go --config ../noir-examples/poseidon-rounds/params_for_recursive_verifier --r1cs ../noir-examples/poseidon-rounds/r1cs.json'
+```
+
+## Example Benchmarks
+
+### Poseidon Rounds (1000 rounds)
+
+```bash
+cd noir-examples/poseidon-rounds
+nargo compile
+
+cargo run --release --bin provekit-cli prepare \
+  ./target/basic.json \
+  --pkp ./prover.pkp \
+  --pkv ./verifier.pkv
+
+hyperfine --warmup 2 --runs 10 \
+  'nargo execute && bb prove -b ./target/basic.json -w ./target/basic.gz -o ./target' \
+  '../../target/release/provekit-cli prove ./prover.pkp ./Prover.toml' \
+  --export-markdown poseidon_benchmark.md
+```
+
+### SHA-256
+
+```bash
+cd noir-examples/sha256
+nargo compile
+
+cargo run --release --bin provekit-cli prepare \
+  ./target/basic.json \
+  --pkp ./prover.pkp \
+  --pkv ./verifier.pkv
+
+hyperfine --warmup 2 \
+  'nargo execute && bb prove -b ./target/basic.json -w ./target/basic.gz -o ./target' \
+  '../../target/release/provekit-cli prove ./prover.pkp ./Prover.toml'
+```
+
+### P-256 Signature Verification
+
+```bash
+cd noir-examples/p256_std
+nargo compile
+
+cargo run --release --bin provekit-cli prepare \
+  ./target/basic.json \
+  --pkp ./prover.pkp \
+  --pkv ./verifier.pkv
+
+hyperfine --warmup 2 \
+  'nargo execute && bb prove -b ./target/basic.json -w ./target/basic.gz -o ./target' \
+  '../../target/release/provekit-cli prove ./prover.pkp ./Prover.toml'
+```
+
+## Analyzing Circuit Complexity
+
+Before benchmarking, analyze circuit statistics:
+
+```bash
+cargo run --release --bin provekit-cli circuit_stats ./target/basic.json
+```
+
+This shows:
+- Number of constraints
+- Number of variables
+- Public input count
+- Circuit depth
+- Memory requirements
+
+## Analyzing PKP Size
+
+Measure prover key size breakdown:
+
+```bash
+cargo run --release --bin provekit-cli analyze-pkp ./prover.pkp
+```
+
+This shows:
+- Total file size
+- Size per component
+- Compression potential
+
+## Best Practices
+
+### Consistent Environment
+
+- Run benchmarks on the same hardware
+- Close unnecessary applications
+- Disable CPU frequency scaling (if possible)
+- Use release builds (`--release` flag)
+
+### Multiple Runs
+
+- Use at least 10 runs for statistical significance
+- Include warmup runs to account for caching
+- Monitor for outliers
+
+### Fair Comparisons
+
+- Compare equivalent operations (prove vs prove, verify vs verify)
+- Use the same circuit and inputs
+- Measure end-to-end times including any setup
+
+### Documentation
+
+- Record hardware specifications
+- Note software versions (Noir, ProveKit, Barretenberg)
+- Save raw results for future reference
+- Export results in machine-readable formats (JSON)
+
+## CI/CD Integration
+
+Automate benchmarks in your CI pipeline:
+
+```yaml
+- name: Run benchmarks
+  run: |
+    cargo build --release --bin provekit-cli
+    cd noir-examples/poseidon-rounds
+    nargo compile
+    cargo run --release --bin provekit-cli prepare ./target/basic.json --pkp ./prover.pkp --pkv ./verifier.pkv
+    hyperfine --export-json ../../benchmark_results.json \
+      '../../target/release/provekit-cli prove ./prover.pkp ./Prover.toml'
+```
+
+## Next Steps
+
+- Learn about [Profiling](/guides/profiling) to identify performance bottlenecks
+- Explore the [Architecture](/concepts/architecture) to understand optimization opportunities
+- See the [Proving Workflow](/guides/proving-workflow) for usage patterns

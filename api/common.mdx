@@ -1,0 +1,319 @@
+---
+title: Common Types API
+description: Core types and utilities used across ProveKit
+---
+
+## Overview
+
+The `provekit_common` crate provides core types used throughout ProveKit, including the `Prover`, `Verifier`, `R1CS`, `NoirProof`, and `PublicInputs` types.
+
+## Core Types
+
+### Prover
+
+Contains all data needed to generate proofs.
+
+```rust
+pub struct Prover {
+    pub program: Program<NoirElement>,
+    pub r1cs: R1CS,
+    pub split_witness_builders: SplitWitnessBuilders,
+    pub witness_generator: NoirWitnessGenerator,
+    pub whir_for_witness: WhirR1CSScheme,
+}
+```
+
+**Methods:**
+
+```rust
+impl Prover {
+    pub fn from_noir_proof_scheme(scheme: NoirProofScheme) -> Self;
+    pub const fn size(&self) -> (usize, usize);
+}
+```
+
+### Verifier
+
+Contains all data needed to verify proofs.
+
+```rust
+pub struct Verifier {
+    pub r1cs: R1CS,
+    pub whir_for_witness: Option<WhirR1CSScheme>,
+    pub abi: Abi,
+}
+```
+
+**Methods:**
+
+```rust
+impl Verifier {
+    pub fn from_noir_proof_scheme(scheme: NoirProofScheme) -> Self;
+}
+```
+
+### R1CS
+
+Rank-1 Constraint System representation.
+
+```rust
+pub struct R1CS {
+    pub num_public_inputs: usize,
+    pub interner: Interner,
+    pub a: SparseMatrix,
+    pub b: SparseMatrix,
+    pub c: SparseMatrix,
+}
+```
+
+Represents constraints of the form: `A × B = C` where each constraint is a row in the matrices.
+
+**Methods:**
+
+```rust
+impl R1CS {
+    pub fn new() -> Self;
+    pub const fn a(&self) -> HydratedSparseMatrix<'_>;
+    pub const fn b(&self) -> HydratedSparseMatrix<'_>;
+    pub const fn c(&self) -> HydratedSparseMatrix<'_>;
+    pub const fn num_constraints(&self) -> usize;
+    pub const fn num_witnesses(&self) -> usize;
+    pub fn add_witnesses(&mut self, count: usize);
+    pub fn add_constraint(
+        &mut self,
+        a: &[(FieldElement, usize)],
+        b: &[(FieldElement, usize)],
+        c: &[(FieldElement, usize)],
+    );
+}
+```
+
+**Example:**
+
+```rust
+use provekit_common::R1CS;
+use ark_bn254::Fr as FieldElement;
+use ark_ff::One;
+
+let mut r1cs = R1CS::new();
+r1cs.add_witnesses(3);
+
+// Add constraint: witness[1] × witness[2] = witness[3]
+r1cs.add_constraint(
+    &[(FieldElement::one(), 1)],
+    &[(FieldElement::one(), 2)],
+    &[(FieldElement::one(), 3)],
+);
+
+println!("Constraints: {}", r1cs.num_constraints());
+println!("Witnesses: {}", r1cs.num_witnesses());
+```
+
+### NoirProof
+
+Complete proof with public inputs.
+
+```rust
+pub struct NoirProof {
+    pub public_inputs: PublicInputs,
+    pub whir_r1cs_proof: WhirR1CSProof,
+}
+```
+
+<ParamField path="public_inputs" type="PublicInputs">
+  Public inputs extracted from the witness
+</ParamField>
+
+<ParamField path="whir_r1cs_proof" type="WhirR1CSProof">
+  WHIR protocol proof data
+</ParamField>
+
+**Example:**
+
+```rust
+use provekit_prover::Prove;
+
+let proof = prover.prove("./Prover.toml")?;
+
+// Access public inputs
+for (i, input) in proof.public_inputs.0.iter().enumerate() {
+    println!("Public input {}: {:?}", i, input);
+}
+```
+
+### PublicInputs
+
+Vector of public field elements.
+
+```rust
+pub struct PublicInputs(pub Vec<FieldElement>);
+```
+
+**Methods:**
+
+```rust
+impl PublicInputs {
+    pub fn new() -> Self;
+    pub fn from_vec(vec: Vec<FieldElement>) -> Self;
+    pub fn len(&self) -> usize;
+    pub fn is_empty(&self) -> bool;
+    pub fn hash(&self) -> FieldElement;
+}
+```
+
+**Example:**
+
+```rust
+use provekit_common::PublicInputs;
+use ark_bn254::Fr as FieldElement;
+
+let inputs = PublicInputs::from_vec(vec![
+    FieldElement::from(42u64),
+    FieldElement::from(100u64),
+]);
+
+println!("Number of public inputs: {}", inputs.len());
+let hash = inputs.hash();
+```
+
+## WhirR1CSScheme
+
+Configuration for WHIR R1CS proving system.
+
+```rust
+pub struct WhirR1CSScheme {
+    pub m: usize,
+    pub w1_size: usize,
+    pub m_0: usize,
+    pub a_num_terms: usize,
+    pub num_challenges: usize,
+    pub has_public_inputs: bool,
+    pub whir_witness: WhirZkConfig,
+}
+```
+
+### Fields
+
+<ParamField path="m" type="usize">
+  Total number of witnesses in the constraint system
+</ParamField>
+
+<ParamField path="w1_size" type="usize">
+  Number of witnesses in the first commitment phase (before challenges)
+</ParamField>
+
+<ParamField path="m_0" type="usize">
+  Number of constraints in the R1CS instance
+</ParamField>
+
+<ParamField path="a_num_terms" type="usize">
+  Number of non-zero terms in the A matrix
+</ParamField>
+
+<ParamField path="num_challenges" type="usize">
+  Number of Fiat-Shamir challenges needed
+</ParamField>
+
+<ParamField path="has_public_inputs" type="bool">
+  Whether the circuit has public inputs
+</ParamField>
+
+<ParamField path="whir_witness" type="WhirZkConfig">
+  WHIR zero-knowledge configuration parameters
+</ParamField>
+
+### Methods
+
+```rust
+impl WhirR1CSScheme {
+    pub fn create_domain_separator(&self) -> WhirDomainSeparator;
+}
+```
+
+**Example:**
+
+```rust
+use provekit_common::WhirR1CSScheme;
+
+let scheme = WhirR1CSScheme {
+    m: 1000,
+    w1_size: 800,
+    m_0: 500,
+    a_num_terms: 1500,
+    num_challenges: 2,
+    has_public_inputs: true,
+    whir_witness: WhirZkConfig::default(),
+};
+
+let ds = scheme.create_domain_separator();
+```
+
+## WhirR1CSProof
+
+Proof data from WHIR protocol.
+
+```rust
+pub struct WhirR1CSProof {
+    pub narg_string: Vec<u8>,
+    pub hints: Vec<u8>,
+}
+```
+
+<ParamField path="narg_string" type="Vec<u8>">
+  Serialized NARG (Non-interactive Argument) proof string
+</ParamField>
+
+<ParamField path="hints" type="Vec<u8>">
+  Serialized hint data for efficient verification
+</ParamField>
+
+## Field Element Types
+
+```rust
+pub type FieldElement = ark_bn254::Fr;      // BN254 scalar field
+pub type NoirElement = acir::FieldElement;   // Noir's field element
+```
+
+ProveKit uses the BN254 curve's scalar field (Fr) for all arithmetic operations.
+
+## Utility Functions
+
+### register_ntt
+
+Registers ProveKit's custom NTT and hash implementations.
+
+```rust
+pub fn register_ntt();
+```
+
+**Must be called once before any prove/verify operations.** Idempotent - safe to call multiple times.
+
+**Example:**
+
+```rust
+use provekit_common::register_ntt;
+
+register_ntt();
+// Now safe to use prover and verifier
+```
+
+## Type Aliases
+
+```rust
+pub type TranscriptSponge = spongefish::instantiations::SHA256;
+pub type WhirConfig = GenericWhirConfig<Identity<FieldElement>>;
+pub type WhirZkConfig = GenericWhirZkConfig<FieldElement>;
+pub type WhirDomainSeparator = transcript::DomainSeparator<'static, ()>;
+pub type WhirProverState = transcript::ProverState;
+pub type WhirProof = transcript::Proof;
+```
+
+## Source References
+
+- `provekit/common/src/lib.rs:18-31` - Main exports
+- `provekit/common/src/prover.rs` - Prover type
+- `provekit/common/src/verifier.rs` - Verifier type
+- `provekit/common/src/r1cs.rs` - R1CS type
+- `provekit/common/src/noir_proof_scheme.rs` - Proof types
+- `provekit/common/src/witness/mod.rs:57-100` - PublicInputs
+- `provekit/common/src/whir_r1cs.rs` - WHIR types

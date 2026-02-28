@@ -1,0 +1,333 @@
+---
+title: show-inputs
+description: Display public inputs from a proof with their original variable names
+---
+
+The `show-inputs` command displays the public inputs contained in a proof, using the original variable names from your Noir program.
+
+## Command Syntax
+
+```bash
+provekit-cli show-inputs <verifier_path> <proof_path> [OPTIONS]
+```
+
+## Arguments
+
+<ParamField path="verifier_path" type="string" required>
+  Path to the verifier PKV file (contains ABI information)
+</ParamField>
+
+<ParamField path="proof_path" type="string" required>
+  Path to the proof file to inspect
+</ParamField>
+
+## Options
+
+<ParamField path="--hex" type="boolean">
+  Display values in hexadecimal format instead of decimal
+</ParamField>
+
+## Examples
+
+### Basic Usage
+
+Display public inputs in decimal format:
+
+```bash
+provekit-cli show-inputs noir_proof_scheme.pkv proof.np
+```
+
+### Hexadecimal Output
+
+Display values as hexadecimal:
+
+```bash
+provekit-cli show-inputs noir_proof_scheme.pkv proof.np --hex
+```
+
+### Example Output
+
+```
+Public Inputs:
+==============
+x: 42
+y: 1337
+threshold (u32): 100
+result (Field): 59
+values ([Field; 3]):
+  [0]: 10
+  [1]: 20
+  [2]: 30
+config (Config):
+  .enabled: true
+  .max_value (u64): 9999
+return: true
+```
+
+### Hexadecimal Example
+
+```bash
+provekit-cli show-inputs scheme.pkv proof.np --hex
+```
+
+```
+Public Inputs:
+==============
+x: 0x000000000000000000000000000000000000000000000000000000000000002a
+y: 0x0000000000000000000000000000000000000000000000000000000000000539
+threshold (u32): 0x0000000000000000000000000000000000000000000000000000000000000064
+result (Field): 0x000000000000000000000000000000000000000000000000000000000000003b
+```
+
+## Supported Types
+
+The command handles all Noir ABI types:
+
+### Primitive Types
+
+<CodeGroup>
+```rust Field
+// Displays as decimal or hex
+x (Field): 12345
+```
+
+```rust Boolean
+// Displays as true/false
+enabled: true
+```
+
+```rust Integers
+// Unsigned: u8, u16, u32, u64, u128
+count (u32): 100
+
+// Signed: i8, i16, i32, i64 (properly handles negative values)
+balance (i64): -500
+```
+
+```rust Strings
+// Fixed-length strings
+name (str<5>): "Alice"
+```
+</CodeGroup>
+
+### Composite Types
+
+<CodeGroup>
+```rust Arrays
+// Fixed-length arrays with indexed elements
+values ([u32; 4]):
+  [0]: 10
+  [1]: 20
+  [2]: 30
+  [3]: 40
+```
+
+```rust Tuples
+// Tuples with field indices
+pair ((Field, bool)):
+  .0: 123
+  .1: true
+```
+
+```rust Structs
+// Structs with field names
+config (Config):
+  .threshold: 100
+  .enabled: true
+  .owner: 0x742d35Cc...
+```
+</CodeGroup>
+
+### Nested Structures
+
+```
+data (ComplexStruct):
+  .id: 42
+  .items ([Item; 2]):
+    [0] (Item):
+      .value: 100
+      .active: true
+    [1] (Item):
+      .value: 200
+      .active: false
+  .metadata (Metadata):
+    .version: 1
+    .timestamp: 1234567890
+```
+
+## Use Cases
+
+### Proof Inspection
+
+Quickly check what public inputs a proof contains:
+
+```bash
+provekit-cli show-inputs scheme.pkv proof.np
+```
+
+### Debugging
+
+Verify that public inputs match expected values:
+
+```bash
+provekit-cli show-inputs scheme.pkv proof.np | grep "x:"
+```
+
+### Auditing
+
+Export public inputs for audit logs:
+
+```bash
+provekit-cli show-inputs scheme.pkv proof.np > proof_inputs.txt
+```
+
+### Comparing Proofs
+
+Compare public inputs from different proofs:
+
+```bash
+provekit-cli show-inputs scheme.pkv proof1.np > inputs1.txt
+provekit-cli show-inputs scheme.pkv proof2.np > inputs2.txt
+diff inputs1.txt inputs2.txt
+```
+
+### Hexadecimal for Hashes
+
+Display cryptographic values in hex:
+
+```bash
+provekit-cli show-inputs scheme.pkv proof.np --hex | grep "hash"
+```
+
+## Understanding the Output
+
+### Variable Names
+
+The command displays original Noir variable names:
+- Function parameter names
+- Struct field names
+- Return value (shown as "return")
+
+### Type Information
+
+Type annotations help interpret values:
+```
+count (u32): 100        # Unsigned 32-bit integer
+balance (i64): -500     # Signed 64-bit integer  
+hash (Field): 0x...     # Field element
+```
+
+### Signed Integers
+
+For signed integers (i8, i16, i32, i64), negative values are properly decoded:
+```
+temperature (i8): -42
+```
+
+Without type information, this would display as 214 (unsigned).
+
+<Note>
+Only signed integers up to 64 bits are decoded as signed values. Larger signed integers display as field elements.
+</Note>
+
+### Field Elements
+
+Field elements are displayed as:
+- **Decimal**: Large integers (default)
+- **Hexadecimal**: 32-byte values with `0x` prefix (with `--hex`)
+
+## Return Values
+
+Public return values are shown at the end:
+
+```
+Public Inputs:
+==============
+x: 10
+y: 20
+return: 30    # Public return value
+```
+
+Private return values are not included in public inputs.
+
+## ABI Information Source
+
+The command requires the PKV file because it contains:
+- ABI parameter definitions
+- Type information for all public inputs
+- Struct and type definitions
+
+Without ABI information, public inputs would display as raw field elements without names or structure.
+
+## Error Handling
+
+### Mismatched ABI
+
+If the proof doesn't match the verifier:
+
+```
+Error: ABI expects more public inputs than the proof contains (need index 5, proof has 3)
+```
+
+This indicates:
+- Wrong PKV file
+- Corrupted proof
+- Circuit version mismatch
+
+### Missing Files
+
+```
+Error: while reading Provekit Verifier
+
+Caused by:
+    No such file or directory (os error 2)
+```
+
+## Integration Examples
+
+### Shell Script
+
+```bash
+#!/bin/bash
+
+# Extract specific value
+X_VALUE=$(provekit-cli show-inputs scheme.pkv proof.np | grep "^x:" | awk '{print $2}')
+
+if [ "$X_VALUE" -gt 100 ]; then
+    echo "Value too large: $X_VALUE"
+    exit 1
+fi
+```
+
+### Python Processing
+
+```python
+import subprocess
+import re
+
+# Get public inputs
+result = subprocess.run(
+    ['provekit-cli', 'show-inputs', 'scheme.pkv', 'proof.np'],
+    capture_output=True,
+    text=True
+)
+
+# Parse output
+for line in result.stdout.split('\n'):
+    match = re.match(r'(\w+)(?:\s+\([^)]+\))?: (\d+)', line)
+    if match:
+        name, value = match.groups()
+        print(f"{name} = {value}")
+```
+
+## Performance
+
+The show-inputs command:
+- Loads verifier (for ABI) and proof
+- Minimal processing required
+- Fast operation even for large proofs
+- Memory usage proportional to proof size
+
+## Source Reference
+
+Implementation: `tooling/cli/src/cmd/show_inputs.rs`

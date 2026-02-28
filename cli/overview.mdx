@@ -1,0 +1,99 @@
+---
+title: CLI Overview
+description: Command-line tools for ProveKit circuit preparation, proving, and verification
+---
+
+The ProveKit CLI provides a complete toolkit for working with Noir programs, from circuit preparation to proof generation and verification.
+
+## Available Commands
+
+<CardGroup cols={2}>
+  <Card title="prepare" icon="wrench" href="/cli/prepare">
+    Prepare a compiled Noir program for proving
+  </Card>
+  
+  <Card title="prove" icon="shield-check" href="/cli/prove">
+    Generate a proof for a prepared Noir program
+  </Card>
+  
+  <Card title="verify" icon="check" href="/cli/verify">
+    Verify a Noir proof
+  </Card>
+  
+  <Card title="circuit_stats" icon="chart-bar" href="/cli/circuit-stats">
+    Analyze ACIR circuit statistics and R1CS complexity
+  </Card>
+  
+  <Card title="analyze-pkp" icon="magnifying-glass" href="/cli/analyze-pkp">
+    Analyze the size breakdown of a PKP file
+  </Card>
+  
+  <Card title="show-inputs" icon="eye" href="/cli/show-inputs">
+    Display public inputs from a proof with variable names
+  </Card>
+  
+  <Card title="generate-gnark-inputs" icon="file-code" href="/cli/generate-gnark-inputs">
+    Generate inputs compatible with gnark recursive verifier
+  </Card>
+</CardGroup>
+
+## Installation
+
+Build the CLI from source:
+
+```bash
+cargo build --release --bin provekit-cli
+```
+
+The compiled binary will be available at `target/release/provekit-cli`.
+
+## Basic Workflow
+
+The typical workflow for using ProveKit CLI:
+
+1. **Prepare** a compiled Noir program:
+   ```bash
+   provekit-cli prepare circuit.json
+   ```
+
+2. **Prove** with input values:
+   ```bash
+   provekit-cli prove noir_proof_scheme.pkp inputs.toml
+   ```
+
+3. **Verify** the generated proof:
+   ```bash
+   provekit-cli verify noir_proof_scheme.pkv proof.np
+   ```
+
+## Global Options
+
+The following options are available when built with the `tracy` feature:
+
+<ParamField path="--tracy" type="boolean">
+  Enable Tracy profiling
+</ParamField>
+
+<ParamField path="--tracy-allocations" type="number">
+  Enable Tracy allocation tracking with specified stack depth (or 0 for no stack traces)
+</ParamField>
+
+<ParamField path="--tracy-keepalive" type="boolean">
+  Keep the process alive after completion to allow Tracy to collect data
+</ParamField>
+
+## Getting Help
+
+For help with any command:
+
+```bash
+provekit-cli --help
+provekit-cli <command> --help
+```
+
+## Source Reference
+
+The CLI implementation is located in:
+- Main entry point: `tooling/cli/src/main.rs`
+- Command definitions: `tooling/cli/src/cmd/mod.rs`
+- Individual commands: `tooling/cli/src/cmd/<command>.rs`

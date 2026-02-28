@@ -1,0 +1,447 @@
+---
+title: WHIR Proof System
+description: Understanding the WHIR proof system and its integration in ProveKit
+---
+
+WHIR is the core proof system used by ProveKit to generate succinct, zero-knowledge proofs for R1CS instances. It provides fast proving times and compact proofs optimized for resource-constrained environments like mobile devices.
+
+## What is WHIR?
+
+WHIR is a **transparent** (no trusted setup), **succinct** proof system based on:
+- **FRI** (Fast Reed-Solomon Interactive Oracle Proof)
+- **Sumcheck protocol** for multivariate polynomials
+- **Circle STARKs** using M31/CM31 fields
+
+Key properties:
+- **Fast proving**: ~100ms for moderately complex circuits
+- **Compact proofs**: ~50-200KB typical size
+- **Mobile-friendly**: Optimized for ARM processors
+- **Zero-knowledge**: Hides all private witness values
+
+Reference: [WHIR GitHub](https://github.com/WizardOfMenlo/whir)
+
+## WHIR in ProveKit
+
+ProveKit uses WHIR to prove R1CS constraint satisfaction. The integration is defined by the `WhirR1CSScheme`:
+
+```rust
+pub struct WhirR1CSScheme {
+    pub m: usize,                  // Log₂ of witness size
+    pub w1_size: usize,            // Size of first witness chunk
+    pub m_0: usize,                // Initial sumcheck variables
+    pub a_num_terms: usize,        // Terms in A matrix
+    pub num_challenges: usize,     // Fiat-Shamir challenges
+    pub has_public_inputs: bool,
+    pub whir_witness: WhirZkConfig,
+}
+```
+
+Reference: `provekit/common/src/whir_r1cs.rs:26-34`
+
+### Domain Separation
+
+Each proof uses a **domain separator** to ensure transcript independence:
+
+```rust
+pub fn create_domain_separator(&self) -> WhirDomainSeparator {
+    transcript::DomainSeparator::protocol(self)
+}
+```
+
+This prevents cross-protocol attacks and enables proof composition.
+
+Reference: `provekit/common/src/whir_r1cs.rs:37-40`
+
+## Zero-Knowledge WHIR
+
+ProveKit implements **zero-knowledge WHIR** to hide private witness values. The construction follows the Σ-IOP variant described in the WHIR ZK documentation.
+
+### ZK Construction
+
+Given a private witness polynomial `f(x₁,...,xᵤ)` and R1CS matrices:
+
+**1. Masking**
+
+The prover masks the witness by adding a random variable:
+```
+f̂(x₁,...,xᵤ,y) = f(x₁,...,xᵤ) + y·mask(x₁,...,xᵤ)
+```
+
+The mask polynomial must:
+- Be uniformly random
+- Have at least as many non-zero coefficients as the query bound
+- Not evaluate to zero on the NTT domain
+
+**2. Blinding Polynomial**
+
+An additional random multilinear polynomial `g(x₁,...,xᵤ,y)` is sampled.
+
+**3. Commitment**
+
+The prover commits to both:
+- `[[f̂]]` - Masked witness oracle
+- `[[g]]` - Blinding oracle
+
+**4. Challenge**
+
+The verifier sends challenge `ρ` and expects proof of:
+```
+ρ·F + G = Σ [ρ·f(b) + g(b,0)]·W(b)
+```
+
+Where `W` is the R1CS weight polynomial.
+
+**5. Sumcheck Proof**
+
+The prover runs non-ZK WHIR on the combined polynomial:
+```
+h(x,y) = ρ·f̂(x,y) + g(x,y)
+```
+
+Reference: `playground/sage/fri-and-friends/Zero Knowledge for WHIR.md:88-141`
+
+<Note>
+The zero-knowledge property holds in the **bounded query model**. The number of queries is determined by the WHIR security parameter and FRI fold factor.
+</Note>
+
+## Proof Generation Workflow
+
+The proving process in ProveKit follows these steps:
+
+### 1. Setup and Registration
+
+```rust
+provekit_common::register_ntt();
+```
+
+This registers:
+- Custom NTT (Number Theoretic Transform) for efficient polynomial operations
+- Skyscraper hash engine for Merkle trees and commitments
+
+Reference: `provekit/common/src/lib.rs:40-52`
+
+### 2. Witness Generation
+
+Solve for all witness values from the input:
+```rust
+let acir_witness_map = self.generate_witness(input_map)?;
+```
+
+This executes the Noir program to obtain ACIR witness values.
+
+Reference: `provekit/prover/src/lib.rs:34-58`
+
+### 3. Transcript Initialization
+
+```rust
+let ds = self.whir_for_witness
+    .create_domain_separator()
+    .instance(&Empty);
+let mut merlin = ProverState::new(&ds, TranscriptSponge::default());
+```
+
+The transcript uses **SHA-256 sponge** for Fiat-Shamir challenges.
+
+Reference: `provekit/prover/src/lib.rs:81-85`
+
+### 4. Two-Phase Witness Solving
+
+Witnesses are solved in two phases to enable Fiat-Shamir challenges:
+
+**Phase 1: Solve w1**
+```rust
+crate::r1cs::solve_witness_vec(
+    &mut witness,
+    self.split_witness_builders.w1_layers,
+    &acir_witness_idx_to_value_map,
+    &mut merlin,
+);
+```
+
+Solves all challenge-independent witnesses.
+
+**Commitment to w1:**
+```rust
+let commitment_1 = self.whir_for_witness
+    .commit(&mut merlin, num_witnesses, num_constraints, w1, true)?;
+```
+
+Reference: `provekit/prover/src/lib.rs:94-132`
+
+**Phase 2: Solve w2** (if challenges exist)
+```rust
+crate::r1cs::solve_witness_vec(
+    &mut witness,
+    w2_layers,
+    &acir_witness_idx_to_value_map,
+    &mut merlin,
+);
+```
+
+Solves challenge-dependent witnesses after commitment.
+
+**Commitment to w2:**
+```rust
+let commitment_2 = self.whir_for_witness
+    .commit(&mut merlin, num_witnesses, num_constraints, w2, false)?;
+```
+
+Reference: `provekit/prover/src/lib.rs:134-167`
+
+<Info>
+The two-phase approach is crucial for soundness when circuits use Fiat-Shamir challenges internally. The prover cannot choose w2 values until after committing to w1, preventing malicious witness selection.
+</Info>
+
+### 5. R1CS Sumcheck
+
+Run the sumcheck protocol to prove constraint satisfaction:
+
+```rust
+let whir_r1cs_proof = self.whir_for_witness
+    .prove(merlin, r1cs, commitments, full_witness, &public_inputs)?;
+```
+
+This:
+1. Encodes R1CS as a sumcheck instance
+2. Runs the sumcheck protocol (folding polynomials)
+3. Generates FRI proof for the final folded polynomial
+4. Packages everything into a `WhirR1CSProof`
+
+Reference: `provekit/prover/src/lib.rs:195-198`
+
+### 6. Output Proof
+
+```rust
+NoirProof {
+    public_inputs,
+    whir_r1cs_proof,
+}
+```
+
+The final proof contains:
+- Public inputs (plaintext)
+- WHIR proof (commitments + sumcheck + FRI)
+
+Reference: `provekit/prover/src/lib.rs:200-203`
+
+## Proof Verification Workflow
+
+Verification is simpler than proving:
+
+### 1. Setup
+
+```rust
+provekit_common::register_ntt();
+```
+
+Registers the same NTT and hash engine as the prover.
+
+### 2. Verify WHIR Proof
+
+```rust
+self.whir_for_witness
+    .verify(&proof.whir_r1cs_proof, &proof.public_inputs, &self.r1cs)?;
+```
+
+This:
+1. Reconstructs the transcript from proof data
+2. Verifies FRI proof validity
+3. Checks sumcheck fold correctness
+4. Validates public input binding
+
+Reference: `provekit/verifier/src/lib.rs:16-25`
+
+<Note>
+Verification is **significantly faster** than proving (typically 10-100×), making it suitable for resource-constrained verifiers or on-chain verification.
+</Note>
+
+## Skyscraper Field Arithmetic
+
+ProveKit uses **Skyscraper** - an optimized hash function designed for WHIR's M31/CM31 fields.
+
+### Why Skyscraper?
+
+Traditional hash functions (SHA-256, BLAKE3) are optimized for 32/64-bit arithmetic, not 31-bit prime fields. Skyscraper is designed specifically for:
+- **M31**: Mersenne-31 field (2³¹ - 1)
+- **CM31**: Complex extension of M31
+
+Benefits:
+- **3-10× faster** than generic hashes on WHIR fields
+- **SIMD-friendly**: Vectorizes well on ARM NEON and x86 AVX
+- **Mobile-optimized**: Excellent performance on mobile CPUs
+
+Reference: [Skyscraper paper](https://eprint.iacr.org/2025/058.pdf), `skyscraper/core/Readme.md`
+
+### Integration in WHIR
+
+ProveKit registers Skyscraper as the hash engine for WHIR:
+
+```rust
+pub fn register_ntt() {
+    let skyscraper: Arc<dyn whir::hash::HashEngine> =
+        Arc::new(skyscraper::SkyscraperHashEngine);
+    whir::hash::ENGINES.register(skyscraper);
+}
+```
+
+Reference: `provekit/common/src/lib.rs:48-50`
+
+**Hash engine uses:**
+- **Merkle trees**: Committing to polynomial evaluations
+- **Fiat-Shamir**: Generating verifier challenges
+- **Channel binding**: Domain separation for sub-protocols
+
+Reference: `provekit/common/src/skyscraper/whir.rs`
+
+### Skyscraper Variants
+
+ProveKit includes multiple Skyscraper implementations:
+
+**Portable SIMD** (`skyscraper/core/src/simple.rs`)
+- Uses Rust portable SIMD
+- Works on all architectures
+- Good baseline performance
+
+**AArch64 NEON** (`skyscraper/core/src/block3.rs`, `block4.rs`)
+- Hand-optimized ARM assembly
+- Best performance on mobile (iOS, Android)
+- Processes 3-4 blocks in parallel
+
+**x86 AVX** (via portable SIMD)
+- Uses AVX2/AVX512 when available
+- Good desktop performance
+
+Reference: `skyscraper/core/src/lib.rs:15-34`
+
+<Tip>
+The optimal Skyscraper variant is selected at compile time based on target architecture. For mobile builds, ensure you're compiling with `--target aarch64-*` to get NEON optimizations.
+</Tip>
+
+## Proof Structure
+
+A `WhirR1CSProof` contains:
+
+```rust
+pub struct WhirR1CSProof {
+    pub narg_string: Vec<u8>,  // Sumcheck transcript + commitments
+    pub hints: Vec<u8>,        // FRI query responses
+    
+    #[cfg(debug_assertions)]
+    pub pattern: Vec<Interaction>,  // Debug: expected transcript pattern
+}
+```
+
+Reference: `provekit/common/src/whir_r1cs.rs:43-55`
+
+**Components:**
+
+**narg_string**: Sumcheck protocol transcript
+- Polynomial commitments (Merkle roots)
+- Folding challenges
+- Final polynomial evaluation
+- Public input binding
+
+**hints**: FRI query responses
+- Merkle paths for queried positions
+- Polynomial evaluations
+- Consistency check data
+
+<Info>
+In **debug builds**, the prover stores the expected interaction pattern. The verifier checks that the proof follows this pattern exactly, catching protocol bugs early.
+
+This validation is **disabled in release builds** for performance.
+</Info>
+
+## Performance Characteristics
+
+### Proving Time
+
+Typical proving time breakdown:
+- **Witness generation**: 10-30% (Noir execution)
+- **First commitment**: 30-40% (FRI commit on w1)
+- **Sumcheck**: 30-50% (polynomial folding + evaluations)
+- **Second commitment**: 5-10% (if challenges exist)
+
+**Complexity**: `O(N log N)` where N = number of witnesses
+
+### Proof Size
+
+Proof size depends on:
+- **Security parameter** (typically 128 bits)
+- **FRI fold factor** (2-4)
+- **Number of queries** (determined by soundness error)
+
+Typical sizes:
+- Small circuits (under 10K constraints): ~30KB
+- Medium circuits (100K constraints): ~80KB
+- Large circuits (1M constraints): ~200KB
+
+### Memory Usage
+
+Peak memory occurs during commitment phase:
+- **Witness vector**: `8N` bytes (N field elements)
+- **R1CS matrices**: ~100 bytes per constraint (sparse)
+- **Temporary buffers**: `16N` bytes (polynomial evaluation)
+
+**Total**: ~50-200MB for typical circuits
+
+<Tip>
+ProveKit **compresses** R1CS matrices and witness builders during proving to reduce peak memory:
+
+```rust
+let compressed_r1cs = CompressedR1CS::compress(self.r1cs)?;
+```
+
+This enables proving on mobile devices with limited RAM.
+</Tip>
+
+## Configuration Options
+
+WHIR configuration is determined during circuit preparation:
+
+```rust
+pub struct WhirZkConfig {
+    // Security parameters
+    // FRI configuration
+    // Query bounds
+    // Field choice (M31/CM31)
+}
+```
+
+These are set automatically based on:
+- Circuit size (number of constraints)
+- Security level (typically 128 bits)
+- Target platform (mobile vs. desktop)
+
+Reference: `provekit/common/src/whir_r1cs.rs:14`
+
+<Note>
+WHIR parameters are **baked into the proving/verifying keys** during `prepare`. You cannot change security parameters without regenerating keys.
+</Note>
+
+## Comparison with Other Systems
+
+**vs. Groth16:**
+- ✅ No trusted setup (transparent)
+- ✅ Faster proving (1.5-3× on mobile)
+- ❌ Larger proofs (10-20× larger)
+
+**vs. PLONK:**
+- ✅ Faster proving (2-5×)
+- ✅ Better mobile performance
+- ✅ No trusted setup
+- ❌ Larger proofs (5-10× larger)
+
+**vs. Barretenberg (Noir's default backend):**
+- ✅ 2-3× faster on mobile (ARM)
+- ✅ Lower memory usage
+- ✅ Better suited for resource-constrained devices
+- ➖ Similar proof sizes
+
+Reference: Main README benchmark section
+
+## Next Steps
+
+- [R1CS Constraint Systems](/concepts/r1cs) - Understanding what WHIR proves
+- [Noir Integration](/concepts/noir-integration) - Writing circuits for ProveKit
+- [Architecture](/concepts/architecture) - How WHIR fits into the overall system

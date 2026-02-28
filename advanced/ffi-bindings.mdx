@@ -1,0 +1,539 @@
+---
+title: 'FFI Bindings'
+description: 'Using ProveKit from other programming languages via FFI'
+---
+
+# FFI Bindings
+
+ProveKit provides comprehensive C-compatible FFI (Foreign Function Interface) bindings, enabling integration with virtually any programming language. The FFI layer is production-ready for mobile (iOS, Android), desktop, web, and embedded platforms.
+
+## Overview
+
+The FFI bindings are implemented in `tooling/provekit-ffi` and provide:
+
+- **C ABI compatibility**: Standard C calling conventions
+- **Memory safety**: Panic-safe boundary with proper error handling
+- **Multiple output formats**: Binary, JSON, and file-based outputs
+- **Cross-platform**: Builds for iOS, Android, WASM, and desktop
+- **Custom allocators**: Support for platform-specific memory management
+
+## Core FFI Functions
+
+### Initialization
+
+```c
+int pk_init(void);
+```
+
+Initializes ProveKit library. Must be called once before any other functions.
+
+**Returns**: `PK_SUCCESS` (0) on success
+
+**Implementation**:
+```rust
+#[no_mangle]
+pub extern "C" fn pk_init() -> c_int {
+    provekit_common::register_ntt();
+    PKError::Success.into()
+}
+```
+
+Reference: `tooling/provekit-ffi/src/ffi.rs:165`
+
+### Proof Generation (File Output)
+
+```c
+int pk_prove_to_file(
+    const char *prover_path,
+    const char *input_path,
+    const char *out_path
+);
+```
+
+Generates a proof and writes it to a file.
+
+**Parameters**:
+- `prover_path`: Path to prepared proof scheme (`.pkp` file)
+- `input_path`: Path to witness/input values (`.toml` file)
+- `out_path`: Path for output proof file (`.np` or `.json`)
+
+**Returns**: Error code (see [Error Codes](#error-codes))
+
+**Implementation**:
+```rust
+#[no_mangle]
+pub unsafe extern "C" fn pk_prove_to_file(
+    prover_path: *const c_char,
+    input_path: *const c_char,
+    out_path: *const c_char,
+) -> c_int {
+    catch_panic(PKError::ProofError.into(), || {
+        let prover_path = c_str_to_str(prover_path)?;
+        let input_path = c_str_to_str(input_path)?;
+        let out_path = c_str_to_str(out_path)?;
+        
+        let prover: Prover = read(Path::new(&prover_path))
+            .map_err(|_| PKError::SchemeReadError)?;
+        
+        let proof = prover.prove(&input_path)
+            .map_err(|_| PKError::ProofError)?;
+        
+        provekit_common::file::write(&proof, Path::new(&out_path))
+            .map_err(|_| PKError::FileWriteError)?;
+        
+        Ok(())
+    })
+}
+```
+
+Reference: `tooling/provekit-ffi/src/ffi.rs:46`
+
+### Proof Generation (JSON Output)
+
+```c
+int pk_prove_to_json(
+    const char *prover_path,
+    const char *input_path,
+    PKBuf *out_buf
+);
+```
+
+Generates a proof and returns it as a JSON string in memory.
+
+**Parameters**:
+- `prover_path`: Path to prepared proof scheme
+- `input_path`: Path to witness/input values
+- `out_buf`: Output buffer (must be freed with `pk_free_buf`)
+
+**Returns**: Error code
+
+**Buffer Structure**:
+```c
+typedef struct {
+    uint8_t *ptr;  // Pointer to data
+    size_t len;    // Length in bytes
+    size_t cap;    // Capacity (for deallocation)
+} PKBuf;
+```
+
+Reference: `tooling/provekit-ffi/include/provekit_ffi.h:14`
+
+### Memory Management
+
+```c
+void pk_free_buf(PKBuf buf);
+```
+
+Frees a buffer allocated by ProveKit FFI functions.
+
+**Safety Requirements**:
+- Buffer must have been allocated by ProveKit FFI
+- Buffer must not be used after calling this function
+- Must be called exactly once per allocated buffer
+
+**Implementation**:
+```rust
+#[no_mangle]
+pub unsafe extern "C" fn pk_free_buf(buf: PKBuf) {
+    if !buf.ptr.is_null() && buf.cap > 0 {
+        drop(Vec::from_raw_parts(buf.ptr, buf.len, buf.cap));
+    }
+}
+```
+
+Reference: `tooling/provekit-ffi/src/ffi.rs:150`
+
+## Memory Allocator Configuration
+
+### Mmap Allocator
+
+ProveKit FFI supports a custom mmap-based allocator with RAM limits and swap:
+
+```c
+int pk_configure_memory(
+    size_t ram_limit_bytes,
+    bool use_file_backed,
+    const char *swap_file_path
+);
+```
+
+**Must be called before `pk_init()`**
+
+**Parameters**:
+- `ram_limit_bytes`: Maximum RAM before using swap (must be > 0)
+- `use_file_backed`: Whether to use file-backed mmap for swap
+- `swap_file_path`: Directory for swap files (NULL = system temp)
+
+**Returns**: `PK_SUCCESS` or `PK_INVALID_INPUT`
+
+Reference: `tooling/provekit-ffi/src/ffi.rs:192`
+
+### Memory Statistics
+
+```c
+int pk_get_memory_stats(
+    size_t *ram_used,
+    size_t *swap_used,
+    size_t *peak_ram
+);
+```
+
+Returns current memory usage statistics. All parameters can be NULL.
+
+Reference: `tooling/provekit-ffi/src/ffi.rs:225`
+
+### Custom Allocators
+
+```c
+void pk_set_allocator(
+    void *(*alloc_fn)(size_t size, size_t align),
+    void (*dealloc_fn)(void *ptr, size_t size, size_t align)
+);
+```
+
+Sets custom allocator functions. Pass NULL for both to use system allocator.
+
+Reference: `tooling/provekit-ffi/include/provekit_ffi.h:82`
+
+## Error Codes
+
+```c
+typedef enum {
+    PK_SUCCESS = 0,
+    PK_INVALID_INPUT = 1,
+    PK_SCHEME_READ_ERROR = 2,
+    PK_WITNESS_READ_ERROR = 3,
+    PK_PROOF_ERROR = 4,
+    PK_SERIALIZATION_ERROR = 5,
+    PK_UTF8_ERROR = 6,
+    PK_FILE_WRITE_ERROR = 7,
+} PKError;
+```
+
+Reference: `tooling/provekit-ffi/include/provekit_ffi.h:25`
+
+**Error Handling**:
+```rust
+// Rust implementation converts Rust errors to error codes
+fn catch_panic<F, T>(default: T, f: F) -> T
+where
+    F: FnOnce() -> T + panic::UnwindSafe,
+{
+    panic::catch_unwind(f).unwrap_or(default)
+}
+```
+
+All FFI functions are panic-safe and will not unwind across the FFI boundary.
+
+Reference: `tooling/provekit-ffi/src/ffi.rs:21`
+
+## Language-Specific Usage
+
+### C/C++
+
+```c
+#include "provekit_ffi.h"
+#include <stdio.h>
+
+int main() {
+    // Initialize
+    if (pk_init() != PK_SUCCESS) {
+        fprintf(stderr, "Failed to initialize ProveKit\n");
+        return 1;
+    }
+    
+    // Generate proof to file
+    int result = pk_prove_to_file(
+        "scheme.pkp",
+        "input.toml",
+        "proof.np"
+    );
+    
+    if (result != PK_SUCCESS) {
+        fprintf(stderr, "Proving failed: %d\n", result);
+        return 1;
+    }
+    
+    printf("Proof generated successfully\n");
+    return 0;
+}
+```
+
+### Swift (iOS)
+
+```swift
+import Foundation
+import ProvekitFFI
+
+class ProveKitManager {
+    static let shared = ProveKitManager()
+    
+    private init() {
+        guard pk_init() == PK_SUCCESS else {
+            fatalError("Failed to initialize ProveKit")
+        }
+    }
+    
+    func generateProof(
+        schemeURL: URL,
+        inputURL: URL
+    ) throws -> String {
+        var proofBuf = PKBuf(ptr: nil, len: 0, cap: 0)
+        
+        let result = pk_prove_to_json(
+            schemeURL.path,
+            inputURL.path,
+            &proofBuf
+        )
+        
+        guard result == PK_SUCCESS else {
+            throw ProveKitError(code: result)
+        }
+        
+        defer { pk_free_buf(proofBuf) }
+        
+        guard let jsonString = String(
+            bytesNoCopy: proofBuf.ptr,
+            length: proofBuf.len,
+            encoding: .utf8,
+            freeWhenDone: false
+        ) else {
+            throw ProveKitError.invalidUTF8
+        }
+        
+        return jsonString
+    }
+}
+```
+
+### Python (via ctypes)
+
+```python
+import ctypes
+from pathlib import Path
+
+class PKBuf(ctypes.Structure):
+    _fields_ = [
+        ("ptr", ctypes.POINTER(ctypes.c_uint8)),
+        ("len", ctypes.c_size_t),
+        ("cap", ctypes.c_size_t),
+    ]
+
+class ProveKit:
+    def __init__(self, lib_path: str):
+        self.lib = ctypes.CDLL(lib_path)
+        
+        # Define function signatures
+        self.lib.pk_init.restype = ctypes.c_int
+        self.lib.pk_prove_to_json.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.POINTER(PKBuf)
+        ]
+        self.lib.pk_prove_to_json.restype = ctypes.c_int
+        self.lib.pk_free_buf.argtypes = [PKBuf]
+        
+        # Initialize
+        if self.lib.pk_init() != 0:
+            raise RuntimeError("Failed to initialize ProveKit")
+    
+    def prove(self, scheme_path: Path, input_path: Path) -> dict:
+        buf = PKBuf()
+        result = self.lib.pk_prove_to_json(
+            str(scheme_path).encode('utf-8'),
+            str(input_path).encode('utf-8'),
+            ctypes.byref(buf)
+        )
+        
+        if result != 0:
+            raise RuntimeError(f"Proving failed: {result}")
+        
+        try:
+            json_bytes = ctypes.string_at(buf.ptr, buf.len)
+            return json.loads(json_bytes.decode('utf-8'))
+        finally:
+            self.lib.pk_free_buf(buf)
+```
+
+### Kotlin (Android)
+
+```kotlin
+import java.io.File
+
+external fun pk_init(): Int
+external fun pk_prove_to_file(
+    proverPath: String,
+    inputPath: String,
+    outPath: String
+): Int
+
+class ProveKitManager {
+    companion object {
+        init {
+            System.loadLibrary("provekit_ffi")
+        }
+        
+        private var initialized = false
+        
+        fun initialize() {
+            if (!initialized) {
+                if (pk_init() != 0) {
+                    throw RuntimeException("Failed to initialize ProveKit")
+                }
+                initialized = true
+            }
+        }
+    }
+    
+    fun generateProof(
+        schemePath: File,
+        inputPath: File,
+        outputPath: File
+    ) {
+        val result = pk_prove_to_file(
+            schemePath.absolutePath,
+            inputPath.absolutePath,
+            outputPath.absolutePath
+        )
+        
+        if (result != 0) {
+            throw RuntimeException("Proof generation failed: $result")
+        }
+    }
+}
+```
+
+## Building for Different Platforms
+
+### iOS (XCFramework)
+
+```bash
+# Install targets
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+
+# Build for all iOS targets
+cargo build --release --target aarch64-apple-ios -p provekit-ffi
+cargo build --release --target aarch64-apple-ios-sim -p provekit-ffi
+cargo build --release --target x86_64-apple-ios -p provekit-ffi
+
+# Create XCFramework
+xcodebuild -create-xcframework \
+  -library target/aarch64-apple-ios/release/libprovekit_ffi.a \
+    -headers tooling/provekit-ffi/include \
+  -library target/aarch64-apple-ios-sim/release/libprovekit_ffi.a \
+    -headers tooling/provekit-ffi/include \
+  -library target/x86_64-apple-ios/release/libprovekit_ffi.a \
+    -headers tooling/provekit-ffi/include \
+  -output ProvekitFFI.xcframework
+```
+
+### Android (AAR)
+
+```bash
+# Install Android targets
+rustup target add aarch64-linux-android armv7-linux-androideabi \
+  x86_64-linux-android i686-linux-android
+
+# Build for Android
+cargo build --release --target aarch64-linux-android -p provekit-ffi
+cargo build --release --target armv7-linux-androideabi -p provekit-ffi
+cargo build --release --target x86_64-linux-android -p provekit-ffi
+
+# Copy to Android project
+mkdir -p android/src/main/jniLibs/{arm64-v8a,armeabi-v7a,x86_64}
+cp target/aarch64-linux-android/release/libprovekit_ffi.so \
+   android/src/main/jniLibs/arm64-v8a/
+cp target/armv7-linux-androideabi/release/libprovekit_ffi.so \
+   android/src/main/jniLibs/armeabi-v7a/
+cp target/x86_64-linux-android/release/libprovekit_ffi.so \
+   android/src/main/jniLibs/x86_64/
+```
+
+### Desktop
+
+```bash
+# Linux
+cargo build --release -p provekit-ffi
+# Output: target/release/libprovekit_ffi.so
+
+# macOS
+cargo build --release -p provekit-ffi
+# Output: target/release/libprovekit_ffi.dylib
+
+# Windows
+cargo build --release -p provekit-ffi
+# Output: target/release/provekit_ffi.dll
+```
+
+## File Formats
+
+### Input Files
+
+**Prover files** (`.pkp`):
+- Binary serialized proof scheme
+- Generated by `provekit prepare`
+
+**Witness files** (`.toml`):
+- TOML format with input values
+- Same format as Noir's `Prover.toml`
+
+### Output Files
+
+**Proof files**:
+- `.np`: Binary format (compact)
+- `.json`: JSON format (human-readable)
+
+## Thread Safety
+
+<Warning>
+  FFI functions are **not thread-safe**. If calling from multiple threads, ensure proper synchronization (mutexes, locks, etc.).
+</Warning>
+
+## Best Practices
+
+<Card title="Always Free Buffers" icon="trash">
+  Call `pk_free_buf()` for every buffer returned by `pk_prove_to_json()`. Wrap in defer/finally blocks for safety.
+</Card>
+
+<Card title="Initialize Once" icon="power-off">
+  Call `pk_init()` exactly once before any other ProveKit operations.
+</Card>
+
+<Card title="Check Return Codes" icon="circle-check">
+  Always check return codes. Non-zero indicates an error that must be handled.
+</Card>
+
+<Card title="Validate Paths" icon="folder-open">
+  Ensure all file paths are valid and accessible before calling FFI functions.
+</Card>
+
+## Advanced: Custom Allocators
+
+For mobile platforms with strict memory limits:
+
+```c
+void* mobile_alloc(size_t size, size_t align) {
+    void* ptr = aligned_alloc(align, size);
+    if (ptr) {
+        track_allocation(ptr, size);
+    }
+    return ptr;
+}
+
+void mobile_dealloc(void* ptr, size_t size, size_t align) {
+    untrack_allocation(ptr, size);
+    free(ptr);
+}
+
+int main() {
+    // Set allocator BEFORE pk_init()
+    pk_set_allocator(mobile_alloc, mobile_dealloc);
+    pk_init();
+    // ...
+}
+```
+
+## See Also
+
+- [Performance Optimization](/advanced/optimization) - Memory and performance tuning
+- [Skyscraper Optimization](/advanced/skyscraper) - Field arithmetic internals

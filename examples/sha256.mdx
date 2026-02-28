@@ -1,0 +1,405 @@
+---
+title: 'SHA-256 Circuit'
+description: 'SHA-256 hash verification in zero-knowledge'
+---
+
+This example demonstrates SHA-256 hashing in Noir circuits. While less efficient than Poseidon2 for ZK applications, SHA-256 is essential for compatibility with existing systems and standards.
+
+## Circuit Overview
+
+The circuit implements SHA-256 hashing with variable-length input support, comparing both native Noir implementation and blackbox (optimized) versions.
+
+## Circuit Code
+
+From `noir-examples/noir-native-sha256/src/lib.nr`:
+
+```noir
+use ryan_sha256_compression::ryan_sha256_digest_block_u32;
+use ryan_sha256_constants::{MAX_MSG_LEN, RANDOM_BYTES_MANY_ROUNDS};
+use std::hash::sha256_compression;
+
+pub mod ryan_sha256_noir;
+pub(crate) mod ryan_sha256_compression;
+pub(crate) mod ryan_sha256_constants;
+
+#[test]
+fn test_sha256_var() {
+    // Test two versions of sha256_var against each other
+    for idx in 0..10 {
+        let thing_to_absorb: [u8; MAX_MSG_LEN] = RANDOM_BYTES_MANY_ROUNDS[idx];
+        let blackbox_result = sha256::sha256_var(thing_to_absorb, MAX_MSG_LEN as u64);
+        let ryan_result = ryan_sha256_noir::sha256_var(thing_to_absorb, MAX_MSG_LEN as u64);
+
+        println(blackbox_result);
+        println(ryan_result);
+        assert_eq(blackbox_result, ryan_result);
+    }
+}
+```
+
+### What This Circuit Does
+
+1. **Variable-Length Input**: Supports messages up to `MAX_MSG_LEN` bytes
+2. **Dual Implementation**: Tests both blackbox and native Noir implementations
+3. **Byte-Level Operations**: Works with `u8` arrays (not field elements)
+4. **Standard Compliance**: Produces standard SHA-256 outputs
+5. **Verification**: Ensures both implementations match
+
+## Input Configuration
+
+The `Prover.toml` file specifies a simple message:
+
+```toml
+msg = [72, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100, 33]
+message_size_bytes = 12
+```
+
+- **msg**: ASCII bytes for "Hello world!" (12 bytes)
+- **message_size_bytes**: Actual length of the message
+
+### Message Breakdown
+
+```
+72  = 'H'
+101 = 'e'
+108 = 'l'
+108 = 'l'
+111 = 'o'
+32  = ' '
+119 = 'w'
+111 = 'o'
+114 = 'r'
+108 = 'l'
+100 = 'd'
+33  = '!'
+```
+
+Expected SHA-256 output:
+```
+c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a
+```
+
+## Complete Workflow
+
+### 1. Compile the Circuit
+
+Compile the SHA-256 circuit:
+
+```bash
+nargo compile
+```
+
+Note: SHA-256 circuits are significantly larger than Poseidon2:
+- **SHA-256**: ~25,000 constraints per hash
+- **Poseidon2**: ~100 constraints per hash
+
+Expected output:
+```
+Compiling circuit: noir-native-sha256
+Warning: Large circuit detected (SHA-256 requires many constraints)
+Compilation complete
+```
+
+### 2. Prepare Proving System
+
+Generate proving and verification keys:
+
+```bash
+provekit prepare noir-native-sha256
+```
+
+Expected output:
+```
+Preparing circuit: noir-native-sha256
+Circuit size: ~25,000 constraints
+Generating proving key... (this may take several minutes)
+Generating verification key...
+Preparation complete
+```
+
+### 3. Generate Proof
+
+Create a proof for the message:
+
+```bash
+provekit prove noir-native-sha256
+```
+
+Expected output:
+```
+Generating proof for: noir-native-sha256
+Message: "Hello world!"
+Message bytes: [72, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100, 33]
+Computed SHA-256: c0535e4be2b79ffd93291305436bf889314e4a3faec05ecffcbb7df31ad9e51a
+Proof generation time: ~30 seconds
+Proof saved to: proof.json
+```
+
+### 4. Verify Proof
+
+Verify the SHA-256 computation:
+
+```bash
+provekit verify noir-native-sha256 proof.json
+```
+
+Expected output:
+```
+Verifying proof for: noir-native-sha256
+Verification successful
+Verification time: ~100ms
+```
+
+## SHA-256 vs Poseidon2
+
+### Constraint Comparison
+
+| Hash Function | Constraints | Proving Time | Use Case |
+|---------------|-------------|--------------|----------|
+| SHA-256       | ~25,000     | ~30 seconds  | Compatibility |
+| Poseidon2     | ~100        | under 1 second    | ZK-native |
+
+### When to Use SHA-256
+
+**Use SHA-256 when you need:**
+- Compatibility with existing systems
+- Standard hash outputs for verification
+- Interoperability with non-ZK systems
+- Bitcoin/Ethereum compatibility
+
+**Use Poseidon2 when you need:**
+- Maximum efficiency in ZK circuits
+- Fast proving times
+- Minimal constraint count
+- ZK-native applications
+
+## Implementation Details
+
+### Blackbox SHA-256
+
+Noir provides an optimized blackbox implementation:
+
+```noir
+use std::hash::sha256;
+
+let hash = sha256::sha256_var(message, length);
+```
+
+Benefits:
+- Optimized at the proving system level
+- Faster than pure Noir implementation
+- Same constraints, better performance
+
+### Native Noir SHA-256
+
+Pure Noir implementation for compatibility:
+
+```noir
+use ryan_sha256_noir;
+
+let hash = ryan_sha256_noir::sha256_var(message, length);
+```
+
+Benefits:
+- Fully auditable Noir code
+- Educational reference
+- Customizable for variants
+
+### Variable-Length Messages
+
+SHA-256 supports variable-length inputs:
+
+```noir
+fn sha256_var(msg: [u8; MAX_LEN], msg_len: u64) -> [u8; 32]
+```
+
+The function:
+1. Reads `msg_len` bytes from `msg`
+2. Applies SHA-256 padding
+3. Processes in 512-bit blocks
+4. Returns 256-bit (32 byte) hash
+
+## Use Cases
+
+### Bitcoin Transaction Verification
+
+Prove knowledge of a Bitcoin transaction:
+```noir
+fn verify_bitcoin_tx(tx_data: [u8; TX_SIZE]) {
+    let tx_hash = sha256::sha256_var(tx_data, TX_SIZE);
+    let double_hash = sha256::sha256_var(tx_hash, 32);
+    // Bitcoin uses double SHA-256
+}
+```
+
+### Merkle Proofs
+
+Verify Merkle tree membership with SHA-256:
+```noir
+fn verify_merkle_proof(
+    leaf: [u8; 32],
+    proof: [[u8; 32]; DEPTH],
+    root: [u8; 32]
+) {
+    let mut current = leaf;
+    for i in 0..DEPTH {
+        let combined = concat(current, proof[i]);
+        current = sha256::sha256_var(combined, 64);
+    }
+    assert(current == root);
+}
+```
+
+### Hash Preimage Proofs
+
+Prove you know a preimage without revealing it:
+```noir
+fn prove_preimage(secret: [u8; 32], public_hash: [u8; 32]) {
+    let computed = sha256::sha256_var(secret, 32);
+    assert(computed == public_hash);
+    // Secret remains private, hash is verified
+}
+```
+
+### Ethereum Block Headers
+
+Verify Ethereum block header hashes:
+```noir
+fn verify_eth_block(header: [u8; HEADER_SIZE], block_hash: [u8; 32]) {
+    let computed = sha256::sha256_var(header, HEADER_SIZE);
+    assert(computed == block_hash);
+}
+```
+
+## Advanced Patterns
+
+### Multiple Hashes
+
+Combine multiple SHA-256 operations:
+```noir
+let hash1 = sha256::sha256_var(msg1, len1);
+let hash2 = sha256::sha256_var(msg2, len2);
+let combined = sha256::sha256_var([hash1, hash2], 64);
+```
+
+### Hash Chain Verification
+
+Verify a chain of hashes:
+```noir
+let mut current = initial;
+for i in 0..chain_length {
+    current = sha256::sha256_var(current, 32);
+}
+assert(current == final_hash);
+```
+
+### Hmac-SHA256
+
+Implement HMAC using SHA-256:
+```noir
+fn hmac_sha256(key: [u8; 32], message: [u8; LEN]) -> [u8; 32] {
+    let inner = sha256::sha256_var([key ^ 0x36, message], LEN + 32);
+    let outer = sha256::sha256_var([key ^ 0x5c, inner], 64);
+    outer
+}
+```
+
+## Performance Optimization
+
+### Minimize Hash Operations
+
+Each SHA-256 adds ~25,000 constraints:
+```noir
+// Less efficient: 2 hashes = 50,000 constraints
+let hash1 = sha256(data1);
+let hash2 = sha256(data2);
+
+// More efficient: 1 hash = 25,000 constraints
+let combined = sha256([data1, data2]);
+```
+
+### Use Poseidon2 When Possible
+
+For ZK-native operations, prefer Poseidon2:
+```noir
+// Internal ZK operations: use Poseidon2
+let internal_hash = poseidon2::bn254::hash_2([a, b]);
+
+// External compatibility: use SHA-256
+let external_hash = sha256::sha256_var(data, len);
+```
+
+### Batch Verification
+
+Verify multiple hashes in parallel:
+```noir
+for i in 0..batch_size {
+    let hash = sha256::sha256_var(messages[i], lengths[i]);
+    assert(hash == expected_hashes[i]);
+}
+```
+
+## Testing
+
+Run the included tests:
+
+```bash
+nargo test
+```
+
+Tests include:
+- Variable-length message hashing
+- Compression function tests
+- Blackbox vs native comparison
+- Random input testing
+
+Expected output:
+```
+Running tests...
+test test_sha256_var ... ok (25.3s)
+test test_ryan_sha256_digest_block_u32 ... ok (18.7s)
+All tests passed
+```
+
+## Common Patterns
+
+### ASCII String to Bytes
+
+Convert strings to byte arrays:
+```noir
+let message = "Hello world!";
+let bytes = message.as_bytes();
+let hash = sha256::sha256_var(bytes, bytes.len());
+```
+
+### Hex String Parsing
+
+Parse hex strings:
+```noir
+let hex = "deadbeef";
+let bytes = hex_to_bytes(hex);
+let hash = sha256::sha256_var(bytes, 4);
+```
+
+### Fixed-Length SHA-256
+
+For fixed-length messages:
+```noir
+fn sha256_fixed(msg: [u8; 32]) -> [u8; 32] {
+    sha256::sha256_var(msg, 32)
+}
+```
+
+## Next Steps
+
+- Try different message lengths
+- Implement a Merkle tree with SHA-256
+- Compare proving times with Poseidon2
+- Build a Bitcoin transaction verifier
+- Explore [EdDSA signatures](/examples/eddsa) using Poseidon2
+
+## Related Examples
+
+- [Basic Circuit](/examples/basic) - Simple Poseidon2 hash
+- [Poseidon Rounds](/examples/poseidon) - Efficient ZK hashing
+- [EdDSA Signatures](/examples/eddsa) - Signature verification

@@ -1,0 +1,214 @@
+---
+title: circuit_stats
+description: Analyze ACIR circuit statistics and R1CS complexity
+---
+
+The `circuit_stats` command analyzes a compiled Noir program to provide detailed statistics about the ACIR circuit and its R1CS representation.
+
+## Command Syntax
+
+```bash
+provekit-cli circuit_stats <circuit_path>
+```
+
+## Arguments
+
+<ParamField path="circuit_path" type="string" required>
+  Path to the ACIR circuit file (`.json` format)
+</ParamField>
+
+## Examples
+
+### Basic Usage
+
+Analyze a compiled circuit:
+
+```bash
+provekit-cli circuit_stats ./target/circuit.json
+```
+
+### Example Output
+
+```
+╔═══════════════════════════════════════════════════════════════╗
+║                   ACIR Circuit Analysis                       ║
+╚═══════════════════════════════════════════════════════════════╝
+Circuit: ./target/circuit.json
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Circuit I/O
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Public Parameters:      3
+Private Parameters:     5
+Return Values:          1 (public)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ACIR Statistics
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Total Opcodes:          47
+
+Opcode Breakdown:
+  AssertZero:           32 (68.1%)
+  BlackBox:             15 (31.9%)
+    • Sha256:           10
+    • EcdsaSecp256k1:   5
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+R1CS Compilation Results
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Constraints:            1,234
+Witnesses:              567
+Public Inputs:          4
+
+Constraint Breakdown:
+  From AssertZero:      32 (2.6%)
+  From Sha256:          1,100 (89.1%)
+  From EcdsaSecp256k1:  102 (8.3%)
+```
+
+## Output Sections
+
+### Circuit I/O
+
+Shows the circuit's input and output structure:
+- Number of public parameters
+- Number of private parameters  
+- Number and visibility of return values
+
+### ACIR Statistics
+
+Provides a breakdown of ACIR opcodes:
+- Total number of opcodes
+- Distribution by opcode type
+- Black box function usage
+
+### R1CS Compilation Results
+
+Shows the compiled R1CS constraint system:
+- Total number of R1CS constraints
+- Number of witness variables
+- Number of public inputs
+- Constraint breakdown by source operation
+
+## Use Cases
+
+### Circuit Optimization
+
+Identify expensive operations:
+
+```bash
+provekit-cli circuit_stats circuit.json | grep "Constraint Breakdown"
+```
+
+Look for operations that generate many constraints (like cryptographic primitives) and consider optimizing them.
+
+### Size Estimation
+
+Estimate proof generation complexity before running `prepare`:
+
+```bash
+# Check constraint count
+provekit-cli circuit_stats circuit.json | grep "Constraints:"
+```
+
+More constraints = longer proof generation time and larger prover files.
+
+### Comparing Circuit Versions
+
+Compare statistics before and after optimization:
+
+```bash
+provekit-cli circuit_stats circuit_v1.json > stats_v1.txt
+provekit-cli circuit_stats circuit_v2.json > stats_v2.txt
+diff stats_v1.txt stats_v2.txt
+```
+
+### Black Box Function Analysis
+
+See which cryptographic primitives your circuit uses:
+
+```bash
+provekit-cli circuit_stats circuit.json | grep -A 10 "BlackBox"
+```
+
+## Understanding the Output
+
+### Constraint Count
+
+The number of R1CS constraints determines:
+- Proof generation time
+- Prover file (PKP) size
+- Memory usage during proving
+
+<Note>
+Typical ranges:
+- Simple circuits: 100-1,000 constraints
+- Medium circuits: 1,000-100,000 constraints
+- Complex circuits: 100,000+ constraints
+</Note>
+
+### Opcode Distribution
+
+**AssertZero**: Basic arithmetic constraints (additions, multiplications)
+- Low overhead
+- Typically 1 constraint per opcode
+
+**BlackBox Functions**: Cryptographic primitives
+- High overhead
+- Hundreds or thousands of constraints per function
+- Common functions:
+  - `Sha256`: ~25,000 constraints per hash
+  - `EcdsaSecp256k1`: ~20,000 constraints per signature verification
+  - `Keccak256`: ~30,000 constraints per hash
+
+## Limitations
+
+<Warning>
+Currently, only single-function programs are supported. Multi-function programs will produce an error:
+
+```
+Error: Only single-function programs are currently supported (found 3 functions)
+```
+</Warning>
+
+## Performance
+
+The `circuit_stats` command:
+- Reads and parses the circuit JSON
+- Compiles ACIR to R1CS (same as `prepare` command)
+- Does NOT generate PKP/PKV files (faster than `prepare`)
+- Memory usage scales with circuit size
+
+## Integration with Other Commands
+
+### Before Preparation
+
+```bash
+# 1. Analyze circuit first
+provekit-cli circuit_stats circuit.json
+
+# 2. If stats look good, prepare
+provekit-cli prepare circuit.json
+```
+
+### After Preparation
+
+For detailed PKP file analysis, use [`analyze-pkp`](/cli/analyze-pkp):
+
+```bash
+# Analyze circuit (pre-preparation)
+provekit-cli circuit_stats circuit.json
+
+# Prepare circuit
+provekit-cli prepare circuit.json
+
+# Analyze PKP file (post-preparation)
+provekit-cli analyze-pkp noir_proof_scheme.pkp
+```
+
+## Source Reference
+
+Implementation:
+- Main: `tooling/cli/src/cmd/circuit_stats/mod.rs`
+- Statistics: `tooling/cli/src/cmd/circuit_stats/stats_collector.rs`
+- Display: `tooling/cli/src/cmd/circuit_stats/display.rs`

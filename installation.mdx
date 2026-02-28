@@ -1,0 +1,266 @@
+---
+title: Installation
+description: Install ProveKit and its dependencies including Rust, Noir toolchain, and required build tools.
+---
+
+# Installation
+
+This guide walks you through installing ProveKit and all required dependencies.
+
+## Prerequisites
+
+ProveKit requires:
+
+- **Rust** 1.85 or later
+- **Noir toolchain** v1.0.0-beta.11 (specific version required)
+- **Git** for cloning the repository
+
+<Note>
+  ProveKit requires a specific version of the Noir toolchain. Make sure to use **exactly** v1.0.0-beta.11 to ensure compatibility.
+</Note>
+
+## Step-by-step installation
+
+<Steps>
+  <Step title="Install Rust">
+    Install Rust using rustup, the official Rust toolchain installer:
+
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    ```
+
+    After installation, restart your terminal and verify:
+
+    ```bash
+    rustc --version
+    cargo --version
+    ```
+
+    You should see Rust 1.85 or later.
+  </Step>
+
+  <Step title="Install Noir toolchain">
+    Install the Noir toolchain using `noirup`, then override to the required version:
+
+    ```bash
+    # Install noirup
+    curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
+    ```
+
+    Restart your terminal, then install the specific Noir version:
+
+    ```bash
+    noirup --version v1.0.0-beta.11
+    ```
+
+    Verify the installation:
+
+    ```bash
+    nargo --version
+    ```
+
+    Expected output:
+    ```
+    nargo version = v1.0.0-beta.11
+    ```
+
+    <Warning>
+      Using a different Noir version may cause compilation errors or incompatibility issues. Always use v1.0.0-beta.11.
+    </Warning>
+  </Step>
+
+  <Step title="Clone ProveKit repository">
+    Clone the ProveKit repository from GitHub:
+
+    ```bash
+    git clone https://github.com/worldfnd/ProveKit.git
+    cd ProveKit
+    ```
+  </Step>
+
+  <Step title="Build ProveKit">
+    Build ProveKit in release mode for optimal performance:
+
+    ```bash
+    cargo build --release
+    ```
+
+    This will compile all ProveKit components including:
+    - Core modules (common, r1cs-compiler, prover, verifier)
+    - CLI tool (provekit-cli)
+    - FFI bindings (provekit-ffi)
+    - Benchmarking suite (provekit-bench)
+    - High-performance components (skyscraper, ntt)
+
+    <Tip>
+      The release build may take several minutes on the first run. Subsequent builds will be faster thanks to incremental compilation.
+    </Tip>
+
+    The compiled binaries will be available at:
+    ```
+    target/release/provekit-cli
+    ```
+  </Step>
+
+  <Step title="Verify installation">
+    Verify that ProveKit CLI is working:
+
+    ```bash
+    ./target/release/provekit-cli --help
+    ```
+
+    You should see the ProveKit CLI help message listing available commands:
+    - `prepare` - Generate prover and verifier files
+    - `prove` - Generate proofs
+    - `verify` - Verify proofs
+    - `circuit_stats` - Analyze circuit statistics
+    - `analyze-pkp` - Analyze PKP file size
+    - `show-inputs` - Show public inputs
+    - `generate-gnark-inputs` - Generate Gnark inputs
+  </Step>
+</Steps>
+
+## Mobile platform setup
+
+To build ProveKit for mobile platforms, you'll need additional platform-specific toolchains.
+
+### iOS
+
+Install iOS targets for cross-compilation:
+
+```bash
+# ARM64 for physical devices
+rustup target add aarch64-apple-ios
+
+# ARM64 simulator (Apple Silicon Macs)
+rustup target add aarch64-apple-ios-sim
+
+# x86_64 simulator (Intel Macs)
+rustup target add x86_64-apple-ios
+```
+
+Build for iOS:
+
+<CodeGroup>
+```bash Device (ARM64)
+cargo build --release --target aarch64-apple-ios -p provekit-ffi
+```
+
+```bash Simulator (ARM64)
+cargo build --release --target aarch64-apple-ios-sim -p provekit-ffi
+```
+
+```bash Simulator (x86_64)
+cargo build --release --target x86_64-apple-ios -p provekit-ffi
+```
+</CodeGroup>
+
+Create an XCFramework for distribution:
+
+```bash
+xcodebuild -create-xcframework \
+  -library target/aarch64-apple-ios/release/libprovekit_ffi.a \
+    -headers tooling/provekit-ffi/include \
+  -library target/aarch64-apple-ios-sim/release/libprovekit_ffi.a \
+    -headers tooling/provekit-ffi/include \
+  -library target/x86_64-apple-ios/release/libprovekit_ffi.a \
+    -headers tooling/provekit-ffi/include \
+  -output ProvekitFFI.xcframework
+```
+
+### Android
+
+Install Android NDK and configure targets:
+
+```bash
+# Install Android targets
+rustup target add aarch64-linux-android
+rustup target add armv7-linux-androideabi
+rustup target add x86_64-linux-android
+rustup target add i686-linux-android
+```
+
+Build for Android:
+
+<CodeGroup>
+```bash ARM64 (64-bit)
+cargo build --release --target aarch64-linux-android -p provekit-ffi
+```
+
+```bash ARM32 (32-bit)
+cargo build --release --target armv7-linux-androideabi -p provekit-ffi
+```
+
+```bash x86_64
+cargo build --release --target x86_64-linux-android -p provekit-ffi
+```
+</CodeGroup>
+
+<Note>
+  Building for Android requires the Android NDK to be installed and properly configured. See the [Android NDK documentation](https://developer.android.com/ndk/guides) for setup instructions.
+</Note>
+
+## Optional tools
+
+These tools are optional but recommended for development:
+
+### Barretenberg (for benchmarking)
+
+Install Barretenberg to benchmark ProveKit against the reference implementation:
+
+```bash
+curl -L https://raw.githubusercontent.com/AztecProtocol/aztec-packages/master/barretenberg/bbup/install | bash
+bbup
+```
+
+### Hyperfine (for performance testing)
+
+Install hyperfine for accurate command-line benchmarking:
+
+<CodeGroup>
+```bash macOS
+brew install hyperfine
+```
+
+```bash Linux (Ubuntu/Debian)
+wget https://github.com/sharkdp/hyperfine/releases/download/v1.18.0/hyperfine_1.18.0_amd64.deb
+sudo dpkg -i hyperfine_1.18.0_amd64.deb
+```
+
+```bash Cargo
+cargo install hyperfine
+```
+</CodeGroup>
+
+### Tracy (for profiling)
+
+Install Tracy for advanced CPU and memory profiling:
+
+```bash macOS
+brew install tracy
+```
+
+<Tip>
+  Tracy integration requires building with the `profiling` feature flag:
+  ```bash
+  cargo build --release --bin provekit-cli --features profiling
+  ```
+</Tip>
+
+## Fast development builds
+
+For faster iteration during development, use the `release-fast` profile:
+
+```bash
+cargo build --profile release-fast
+```
+
+This profile uses thinner LTO and more codegen units for faster compile times while maintaining good runtime performance.
+
+## Next steps
+
+Now that ProveKit is installed, proceed to the quick start guide to build your first proof:
+
+<Card title="Quick start" icon="rocket" href="/quickstart">
+  Learn the complete ProveKit workflow
+</Card>

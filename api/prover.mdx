@@ -1,0 +1,150 @@
+---
+title: Prover API
+description: Generate proofs for Noir programs using the Prove trait
+---
+
+## Overview
+
+The `provekit_prover` crate provides the `Prove` trait for generating zero-knowledge proofs from Noir programs. The prover takes witness inputs and produces a `NoirProof` containing the proof data and public inputs.
+
+## Prove Trait
+
+```rust
+pub trait Prove {
+    fn generate_witness(&mut self, input_map: InputMap) -> Result<WitnessMap<NoirElement>>;
+    fn prove(self, prover_toml: impl AsRef<Path>) -> Result<NoirProof>;
+}
+```
+
+Implemented for the `Prover` type from `provekit_common::Prover`.
+
+## Methods
+
+### generate_witness
+
+Generates the witness values from program inputs.
+
+<ParamField path="input_map" type="InputMap" required>
+  Mapping of input names to their values, typically loaded from Prover.toml
+</ParamField>
+
+**Returns:** `Result<WitnessMap<NoirElement>>` - Map of witness indices to field element values
+
+**Example:**
+
+```rust
+use provekit_prover::Prove;
+use noirc_abi::InputMap;
+
+let mut prover = Prover::from_noir_proof_scheme(scheme);
+let input_map = InputMap::new(); // Load your inputs
+let witness = prover.generate_witness(input_map)?;
+```
+
+### prove
+
+Generates a complete zero-knowledge proof.
+
+<ParamField path="prover_toml" type="impl AsRef<Path>" required>
+  Path to Prover.toml file containing witness inputs
+</ParamField>
+
+**Returns:** `Result<NoirProof>` - Complete proof including public inputs and WHIR R1CS proof
+
+**Process:**
+
+1. Loads inputs from Prover.toml
+2. Generates witness values using ACIR execution
+3. Compresses R1CS matrices for memory efficiency
+4. Solves witness in two phases (w1 and w2)
+5. Commits to witnesses using WHIR protocol
+6. Generates final R1CS proof
+
+**Example:**
+
+```rust
+use provekit_prover::Prove;
+use std::path::Path;
+
+let prover = Prover::from_noir_proof_scheme(scheme);
+let proof = prover.prove(Path::new("./Prover.toml"))?;
+
+// Proof contains public inputs and verification data
+println!("Public inputs: {:?}", proof.public_inputs);
+```
+
+## Prover Type
+
+```rust
+pub struct Prover {
+    pub program: Program<NoirElement>,
+    pub r1cs: R1CS,
+    pub split_witness_builders: SplitWitnessBuilders,
+    pub witness_generator: NoirWitnessGenerator,
+    pub whir_for_witness: WhirR1CSScheme,
+}
+```
+
+### Fields
+
+<ParamField path="program" type="Program<NoirElement>">
+  Compiled ACIR program from Noir compiler
+</ParamField>
+
+<ParamField path="r1cs" type="R1CS">
+  R1CS constraint system (A, B, C matrices)
+</ParamField>
+
+<ParamField path="split_witness_builders" type="SplitWitnessBuilders">
+  Layered witness builders split into w1/w2 phases for sound challenge generation
+</ParamField>
+
+<ParamField path="witness_generator" type="NoirWitnessGenerator">
+  ACIR witness generator with ABI information
+</ParamField>
+
+<ParamField path="whir_for_witness" type="WhirR1CSScheme">
+  WHIR protocol configuration for R1CS proof
+</ParamField>
+
+### Methods
+
+#### from_noir_proof_scheme
+
+Constructs a `Prover` from a compiled `NoirProofScheme`.
+
+```rust
+pub fn from_noir_proof_scheme(scheme: NoirProofScheme) -> Self
+```
+
+**Example:**
+
+```rust
+use provekit_common::Prover;
+
+let prover = Prover::from_noir_proof_scheme(scheme);
+let (num_constraints, num_witnesses) = prover.size();
+```
+
+#### size
+
+Returns the size of the constraint system.
+
+```rust
+pub const fn size(&self) -> (usize, usize)
+```
+
+**Returns:** `(num_constraints, num_witnesses)`
+
+## Memory Optimization
+
+The prover implements several memory optimization techniques:
+
+- **R1CS Compression**: Matrices are compressed during witness commitment phases
+- **Phased Witness Solving**: w1 solved before w2 commitment to reduce peak memory
+- **Witness Builder Splitting**: Dependencies analyzed to enable sound challenge generation
+
+## Source Reference
+
+- Implementation: `provekit/prover/src/lib.rs:26-205`
+- Type definition: `provekit/common/src/prover.rs:13-45`

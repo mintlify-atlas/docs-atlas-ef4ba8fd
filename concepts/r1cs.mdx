@@ -1,0 +1,335 @@
+---
+title: R1CS Constraint Systems
+description: Understanding Rank-1 Constraint Systems and their role in ProveKit
+---
+
+R1CS (Rank-1 Constraint System) is the intermediate representation that ProveKit uses to encode computational integrity. Every Noir circuit compiles down to an R1CS instance, which is then proven using the WHIR proof system.
+
+## What is R1CS?
+
+An R1CS instance represents a computation as a set of constraints over a witness vector. Each constraint has the form:
+
+```
+(a₁·w₁ + a₂·w₂ + ... + aₙ·wₙ) × (b₁·w₁ + b₂·w₂ + ... + bₙ·wₙ) = (c₁·w₁ + c₂·w₂ + ... + cₙ·wₙ)
+```
+
+Where:
+- **w** is the witness vector (private + public values)
+- **a**, **b**, **c** are coefficient vectors defining the constraint
+- All arithmetic is in a finite field (BN254 scalar field)
+
+An R1CS instance is **satisfied** when a witness vector makes all constraints true.
+
+## R1CS Structure in ProveKit
+
+ProveKit represents R1CS instances with the following structure:
+
+```rust
+pub struct R1CS {
+    pub num_public_inputs: usize,
+    pub interner: Interner,
+    pub a: SparseMatrix,
+    pub b: SparseMatrix,
+    pub c: SparseMatrix,
+}
+```
+
+Reference: `provekit/common/src/r1cs.rs:6-14`
+
+### Components
+
+**Matrices (A, B, C)**
+
+Three sparse matrices encode the constraint coefficients:
+- Each row is a constraint
+- Each column corresponds to a witness
+- Matrix entries are field elements (coefficients)
+
+**Witness Vector**
+
+The witness vector has special structure:
+```
+w = [1, public_inputs..., private_witnesses...]
+     ↑
+  Always 1 (constant witness)
+```
+
+<Note>
+The **first witness is always 1** - the constant witness. This allows encoding constant terms in constraints.
+
+Reference: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:146-147`
+</Note>
+
+**Interner**
+
+Field elements are deduplicated using an interner for memory efficiency:
+```rust
+pub struct Interner {
+    // Maps field elements to compact IDs
+    // Shared across all three matrices
+}
+```
+
+This is crucial because many constraints reuse the same coefficients (especially 1, -1, and small constants).
+
+### Sparse Matrix Representation
+
+ProveKit uses a custom sparse matrix format optimized for R1CS:
+
+```rust
+pub struct SparseMatrix {
+    pub num_rows: usize,
+    pub num_cols: usize,
+    // Compressed storage of non-zero entries
+}
+```
+
+Reference: `provekit/common/src/sparse_matrix.rs`
+
+**Why sparse?**
+- Most constraint coefficients are zero
+- Circuits produce matrices with less than 1% density
+- Sparse storage reduces memory by 100-1000×
+
+## Compiling Noir to R1CS
+
+ProveKit's R1CS compiler converts ACIR (Noir's intermediate representation) into R1CS constraints.
+
+### Compilation Pipeline
+
+1. **Parse ACIR** - Load compiled Noir circuit (JSON format)
+2. **Process opcodes** - Convert each ACIR opcode to R1CS constraints
+3. **Build witness map** - Map ACIR witnesses to R1CS witness indices
+4. **Optimize operations** - Batch compatible operations for efficiency
+5. **Generate solvers** - Create witness solving instructions
+
+Reference: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:116-122`
+
+### Supported ACIR Opcodes
+
+ProveKit supports the following ACIR opcodes:
+
+**Arithmetic Constraints**
+- `AssertZero(expr)` - Polynomial expressions with products
+
+**Memory Operations**
+- `MemoryInit` - Initialize ROM or RAM blocks
+- `MemoryOp` - Read/write memory operations
+
+**Blackbox Functions**
+- `RANGE` - Range check (batched)
+- `AND` - Bitwise AND (batched with lookup tables)
+- `XOR` - Bitwise XOR (batched with lookup tables)
+- `Poseidon2Permutation` - Native Poseidon2 hash
+- `Sha256Compression` - SHA-256 compression function
+
+Reference: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:468-633`
+
+<Info>
+**Brillig opcodes** (Noir's VM instructions) are handled by Noir's execution engine during witness generation, not during R1CS compilation. The R1CS only encodes the final constraint-level circuit.
+</Info>
+
+### Example: AssertZero Compilation
+
+An ACIR `AssertZero` opcode encoding `x * y = z` compiles to:
+
+**R1CS constraint:**
+```
+A: [1·wₓ]     (coefficient 1 for witness x)
+B: [1·wᵧ]     (coefficient 1 for witness y)
+C: [1·wᵤ]     (coefficient 1 for witness z)
+```
+
+This enforces: `(1·wₓ) × (1·wᵧ) = (1·wᵤ)`
+
+**For expressions like `2x + 3 = y`:**
+```
+A: [2·wₓ, 3·w₁]   (2x + 3, using constant witness)
+B: [1·w₁]         (multiply by 1)
+C: [1·wᵧ]         (equals y)
+```
+
+Enforces: `(2·wₓ + 3·w₁) × (1·w₁) = (1·wᵧ)`, which simplifies to `2x + 3 = y`
+
+Reference: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:254-372`
+
+## Optimized Constraint Generation
+
+ProveKit uses several optimization techniques to reduce R1CS size:
+
+### 1. Batched Binary Operations
+
+Instead of one constraint per bit operation, ProveKit batches operations:
+
+**Without batching:** 32 AND gates → 32 constraints
+
+**With batching:**
+- Decompose 32-bit values into 4 bytes
+- Use byte-level lookup table (8-bit operations)
+- 4 byte lookups + decomposition constraints
+- **~12 constraints total** (2.7× reduction)
+
+Reference: `provekit/r1cs-compiler/src/binops.rs`
+
+<Tip>
+The optimal **atomic width** for lookup tables is automatically selected based on the total number of operations. More operations → larger lookup tables become worthwhile.
+</Tip>
+
+### 2. Batched Range Checks
+
+Range checks are batched by bit-width:
+
+```rust
+// Group all N-bit range checks together
+let mut range_checks: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+```
+
+Each batch uses optimal **base width** for digit decomposition, minimizing total constraint count.
+
+Reference: `provekit/r1cs-compiler/src/range_check.rs`
+
+### 3. Native Hash Functions
+
+**Poseidon2** and **SHA-256** have dedicated implementations instead of being synthesized from basic gates:
+
+- **Poseidon2**: Arithmetic-friendly, uses native field operations
+- **SHA-256**: Optimized with spread tables for rotations
+
+Reference: `provekit/r1cs-compiler/src/poseidon2/`, `provekit/r1cs-compiler/src/sha256_compression.rs`
+
+### 4. Memory Checking
+
+ROM and RAM operations use **permutation checking** instead of explicit address constraints:
+
+- **ROM**: Verify reads match initialization values
+- **RAM**: Verify read-after-write consistency
+- Both use efficient grand product arguments
+
+Reference: `provekit/r1cs-compiler/src/memory/`
+
+## Witness Solving
+
+The R1CS compiler generates **witness builders** - instructions for computing each witness value:
+
+```rust
+pub enum WitnessBuilder {
+    Constant(ConstantTerm),           // Fixed value
+    Acir(usize, usize),              // From ACIR witness
+    Product(usize, usize, usize),    // Multiply two witnesses
+    Sum(Vec<SumTerm>),               // Linear combination
+    // ... specialized builders for batched ops
+}
+```
+
+Reference: `provekit/common/src/witness/binops.rs`
+
+**Solving process:**
+1. Solve ACIR witnesses using Noir's execution engine
+2. Map ACIR witnesses to R1CS witness indices
+3. Execute witness builders in dependency order
+4. Handle Fiat-Shamir challenges (two-phase solving)
+
+Reference: `provekit/prover/src/r1cs/mod.rs`
+
+<Note>
+When the circuit contains Fiat-Shamir challenges, witnesses are solved in two phases:
+- **w1**: Before commitment (challenge-independent)
+- **w2**: After commitment (challenge-dependent)
+
+This ensures challenge freshness while maintaining witness soundness.
+</Note>
+
+## R1CS Statistics
+
+The compiler provides detailed breakdown of constraint sources:
+
+```rust
+pub struct R1CSBreakdown {
+    pub assert_zero_constraints: usize,
+    pub memory_rom_constraints: usize,
+    pub memory_ram_constraints: usize,
+    pub binop_constraints: usize,
+    pub range_constraints: usize,
+    pub sha256_direct_constraints: usize,
+    pub poseidon2_constraints: usize,
+    // ... and witness counts for each
+}
+```
+
+Reference: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:38-91`
+
+**Usage:**
+```bash
+cargo run --release --bin provekit-cli circuit_stats ./target/basic.json
+```
+
+This shows exactly where constraints come from, enabling circuit optimization.
+
+## Working with R1CS
+
+### Creating R1CS Instances
+
+```rust
+use provekit_r1cs_compiler::noir_to_r1cs;
+use acir::circuit::Circuit;
+
+let circuit: Circuit<NoirElement> = /* load from JSON */;
+let (r1cs, witness_map, builders) = noir_to_r1cs(&circuit)?;
+
+println!("Constraints: {}", r1cs.num_constraints());
+println!("Witnesses: {}", r1cs.num_witnesses());
+println!("Public inputs: {}", r1cs.num_public_inputs);
+```
+
+### Adding Constraints Manually
+
+```rust
+let mut r1cs = R1CS::new();
+r1cs.add_witnesses(3); // Add 3 witnesses (plus constant 1)
+
+// Constraint: w1 × w2 = w3
+r1cs.add_constraint(
+    &[(FieldElement::one(), 1)],  // a coefficients
+    &[(FieldElement::one(), 2)],  // b coefficients
+    &[(FieldElement::one(), 3)],  // c coefficients
+);
+```
+
+Reference: `provekit/common/src/r1cs.rs:73-103`
+
+### Checking Satisfaction
+
+In test builds, R1CS satisfaction can be verified:
+
+```rust
+#[cfg(test)]
+r1cs.test_witness_satisfaction(&witness)?;
+```
+
+This checks that all constraints hold for the given witness vector.
+
+Reference: `provekit/prover/src/lib.rs:174-176`
+
+## Performance Characteristics
+
+**Constraint density:** Typical Noir circuits produce R1CS matrices with less than 1% non-zero entries
+
+**Compilation time:** Linear in circuit size, ~1-10ms for small circuits
+
+**Memory usage:** Sparse representation uses ~100 bytes per constraint
+
+**Proving time:** Dominated by WHIR sumcheck (see [WHIR Proofs](/concepts/whir-proofs))
+
+<Tip>
+To minimize R1CS size:
+1. Use native blackbox functions (Poseidon2, SHA-256) instead of synthesizing them
+2. Minimize bit operations (AND/XOR) - they're more expensive than field arithmetic
+3. Use appropriate data types (smaller field elements when possible)
+4. Leverage batching by grouping similar operations
+</Tip>
+
+## Next Steps
+
+- [WHIR Proofs](/concepts/whir-proofs) - How R1CS instances are proven
+- [Noir Integration](/concepts/noir-integration) - Writing circuits that compile to R1CS
+- [Architecture](/concepts/architecture) - Overall system design

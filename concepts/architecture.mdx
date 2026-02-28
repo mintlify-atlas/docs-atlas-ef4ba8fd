@@ -1,0 +1,295 @@
+---
+title: System Architecture
+description: Overview of ProveKit's modular architecture and component organization
+---
+
+ProveKit is a modular zero-knowledge proof toolkit optimized for mobile devices. The system is organized into clear functional layers that separate concerns and enable efficient proof generation and verification.
+
+## Architecture Overview
+
+ProveKit follows a modular architecture with clear separation of concerns:
+
+```
+ProveKit/
+├── provekit/           # Core proving system
+│   ├── common/         # Shared types and abstractions
+│   ├── r1cs-compiler/  # Circuit compilation
+│   ├── prover/         # Proof generation
+│   └── verifier/       # Proof verification
+├── skyscraper/         # Field arithmetic optimization
+├── tooling/            # Developer tools
+└── noir-examples/      # Example circuits
+```
+
+## Core Modules
+
+The core proving system is divided into four fundamental modules:
+
+### Common (`provekit/common`)
+
+Provides shared utilities, core types, and R1CS abstractions used throughout the system.
+
+**Key components:**
+- **R1CS types** (`provekit/common/src/r1cs.rs`) - Core R1CS constraint system representation
+- **WHIR integration** (`provekit/common/src/whir_r1cs.rs`) - WHIR proof scheme configuration
+- **Sparse matrices** (`provekit/common/src/sparse_matrix.rs`) - Efficient constraint matrix storage
+- **Witness types** (`provekit/common/src/witness/`) - Witness generation utilities
+- **Skyscraper integration** (`provekit/common/src/skyscraper/`) - Optimized hash functions and PoW
+
+**Exported types:**
+```rust
+pub use {
+    ark_bn254::Fr as FieldElement,
+    noir_proof_scheme::{NoirProof, NoirProofScheme},
+    r1cs::R1CS,
+    verifier::Verifier,
+    whir_r1cs::{
+        WhirConfig, WhirR1CSProof, WhirR1CSScheme,
+        WhirZkConfig,
+    },
+};
+```
+
+Reference: `provekit/common/src/lib.rs`
+
+<Note>
+The common module uses a **transcript sponge** based on SHA-256 for Fiat-Shamir transformations:
+```rust
+pub type TranscriptSponge = spongefish::instantiations::SHA256;
+```
+</Note>
+
+### R1CS Compiler (`provekit/r1cs-compiler`)
+
+Compiles Noir circuits (ACIR format) into R1CS constraint systems.
+
+**Key components:**
+- **ACIR to R1CS conversion** (`provekit/r1cs-compiler/src/noir_to_r1cs.rs`) - Main compilation pipeline
+- **Witness generation** (`provekit/r1cs-compiler/src/witness_generator.rs`) - Solving witness values
+- **Optimized opcodes:**
+  - Binary operations (`binops.rs`) - Batched AND/XOR using lookup tables
+  - Poseidon2 (`poseidon2/`) - Native Poseidon2 permutation
+  - SHA-256 (`sha256_compression.rs`) - SHA-256 compression function
+  - Memory operations (`memory/`) - ROM/RAM checking
+  - Range checks (`range_check.rs`) - Batched range checking
+
+**Compilation process:**
+1. Parse ACIR circuit from Noir compiler
+2. Convert ACIR opcodes to R1CS constraints
+3. Build witness solving instructions
+4. Optimize with batched operations
+5. Generate WHIR proof configuration
+
+Reference: `provekit/r1cs-compiler/src/lib.rs`
+
+<Info>
+The compiler provides detailed breakdown statistics:
+```rust
+pub struct R1CSBreakdown {
+    pub assert_zero_constraints: usize,
+    pub memory_rom_constraints: usize,
+    pub binop_constraints: usize,
+    pub sha256_direct_constraints: usize,
+    pub poseidon2_constraints: usize,
+    // ... and more
+}
+```
+Use `noir_to_r1cs_with_breakdown()` to access these metrics.
+</Info>
+
+### Prover (`provekit/prover`)
+
+Generates zero-knowledge proofs for R1CS instances.
+
+**Key components:**
+- **Witness generation** - Solves for all witness values from inputs
+- **WHIR commitment** - Commits to witness polynomials
+- **Sumcheck protocol** - Proves R1CS satisfaction
+- **Memory optimization** - Compression of R1CS and witness layers
+
+**Proving workflow:**
+1. Generate ACIR witness from input TOML
+2. Solve R1CS witnesses in two phases (w1, w2)
+3. Compress R1CS matrices to free memory
+4. Commit to witness polynomials using WHIR
+5. Run sumcheck protocol to prove constraint satisfaction
+6. Generate final proof with public inputs
+
+Reference: `provekit/prover/src/lib.rs:62`
+
+<Tip>
+The prover uses **two-phase witness solving** when challenges are present:
+- **w1**: Initial witnesses (solved before first commitment)
+- **w2**: Challenge-dependent witnesses (solved after commitment)
+
+This enables Fiat-Shamir challenges while maintaining witness soundness.
+</Tip>
+
+### Verifier (`provekit/verifier`)
+
+Verifies zero-knowledge proofs against R1CS instances.
+
+**Key components:**
+- **WHIR verification** - Verifies polynomial commitments
+- **Public input checking** - Validates claimed public inputs
+- **Constraint verification** - Checks R1CS satisfaction via sumcheck
+
+**Verification workflow:**
+1. Initialize transcript with domain separator
+2. Replay prover's commitment challenges
+3. Verify WHIR proof of R1CS satisfaction
+4. Validate public inputs match claimed values
+
+Reference: `provekit/verifier/src/lib.rs`
+
+## Tooling Components
+
+ProveKit provides comprehensive tooling for developers:
+
+### CLI (`tooling/cli`)
+
+Command-line interface for all ProveKit operations.
+
+**Available commands:**
+- `prepare` - Generate prover/verifier keys from compiled circuit
+- `prove` - Generate proof from witness inputs
+- `verify` - Verify a proof
+- `circuit_stats` - Analyze R1CS complexity
+- `analyze-pkp` - Show prover key file size breakdown
+- `show-inputs` - Display public inputs with variable names
+- `generate-gnark-inputs` - Export for recursive verification
+
+Reference: Main README, lines 24-64
+
+### FFI (`tooling/provekit-ffi`)
+
+Foreign function interface for integrating ProveKit into other languages.
+
+**Use cases:**
+- Mobile app integration (iOS, Android)
+- Web assembly bindings
+- Cross-language proof generation
+
+### Benchmarking (`tooling/provekit-bench`)
+
+Benchmarking infrastructure for performance testing.
+
+**Features:**
+- Comparative benchmarks against Barretenberg
+- Memory profiling (custom, Tracy, Instruments)
+- CPU profiling (Tracy, Samply)
+
+Reference: Main README, lines 73-162
+
+### Gnark Integration (`tooling/provekit-gnark`)
+
+Utilities for generating inputs compatible with Gnark-based recursive verifiers.
+
+**Purpose:**
+- Export ProveKit proofs for verification in Gnark circuits
+- Enable recursive proof composition
+- Support on-chain verification
+
+Reference: Main README, line 67
+
+## Skyscraper Optimization Layer
+
+Skyscraper provides highly optimized field arithmetic for M31/CM31 fields used in WHIR.
+
+### Core (`skyscraper/core`)
+
+Optimized implementation of the Skyscraper-v2 compression function.
+
+**Key features:**
+- SIMD-optimized arithmetic
+- Multiple implementation variants (portable, block-based)
+- Architecture-specific optimizations (AArch64, x86-64)
+
+Reference: `skyscraper/core/Readme.md`, [Skyscraper paper](https://eprint.iacr.org/2025/058.pdf)
+
+### HLA (`skyscraper/hla`)
+
+High-level arithmetic abstractions over Skyscraper primitives.
+
+### BN254 Multiplier (`skyscraper/bn254-multiplier`)
+
+Optimized multiplication for BN254 elliptic curve operations.
+
+**Variants:**
+- Round-to-nearest-even (RNE)
+- Round-to-zero (RTZ)
+- Portable and SIMD implementations
+
+### Integration with WHIR
+
+ProveKit registers Skyscraper as a custom hash engine in WHIR:
+
+```rust
+pub fn register_ntt() {
+    let skyscraper: Arc<dyn whir::hash::HashEngine> =
+        Arc::new(skyscraper::SkyscraperHashEngine);
+    whir::hash::ENGINES.register(skyscraper);
+}
+```
+
+Reference: `provekit/common/src/lib.rs:36-52`
+
+## Module Dependencies
+
+ProveKit depends on several external libraries:
+
+- **WHIR** - Core proof system implementation
+- **Spongefish** - Cryptographic sponge functions
+- **Noir** - Circuit language and compiler (v1.0.0-beta.11)
+- **ARK ecosystem** - Finite field arithmetic (BN254)
+
+Reference: `Cargo.toml:146-169`
+
+## Data Flow
+
+Typical proof generation flow:
+
+1. **Circuit Development** - Write Noir circuit
+2. **Compilation** - `nargo compile` produces ACIR JSON
+3. **Preparation** - `provekit-cli prepare` generates prover/verifier keys
+4. **Proving** - `provekit-cli prove` generates proof from inputs
+5. **Verification** - `provekit-cli verify` checks proof validity
+
+Each step is modular and can be performed independently with intermediate artifacts saved to disk.
+
+<Note>
+ProveKit requires **Noir v1.0.0-beta.11** specifically. Install with:
+```bash
+noirup --version v1.0.0-beta.11
+```
+</Note>
+
+## Performance Considerations
+
+### Memory Optimization
+
+- **Compression**: R1CS matrices and witness layers are compressed during proving
+- **Staged solving**: Witnesses solved in phases to minimize peak memory
+- **Sparse matrices**: Efficient storage using interned field elements
+
+Reference: `provekit/prover/src/lib.rs:73-119`
+
+### Mobile Optimization
+
+- **Skyscraper**: Fast hash function optimized for ARM NEON
+- **Batched operations**: Amortizes constraint overhead
+- **FFI bindings**: Direct integration into mobile apps
+
+<Tip>
+For mobile deployments, use the release profile with LTO:
+```bash
+cargo build --release --bin provekit-cli
+```
+This enables full link-time optimization for maximum performance.
+</Tip>
+
+## Next Steps
+
+- [R1CS Constraint Systems](/concepts/r1cs) - Deep dive into constraint representation
+- [WHIR Proofs](/concepts/whir-proofs) - Understanding the WHIR proof system
+- [Noir Integration](/concepts/noir-integration) - How Noir circuits compile to R1CS

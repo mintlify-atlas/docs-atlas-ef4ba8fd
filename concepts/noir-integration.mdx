@@ -1,0 +1,554 @@
+---
+title: Noir Circuit Integration
+description: How Noir circuits compile to R1CS and ProveKit's supported features
+---
+
+ProveKit proves Noir circuits by compiling them to R1CS and generating WHIR proofs. This page explains how Noir integration works, which features are supported, and how to write efficient circuits for ProveKit.
+
+## Noir Version Requirements
+
+ProveKit requires **Noir v1.0.0-beta.11** specifically. Install with:
+
+```bash
+noirup --version v1.0.0-beta.11
+```
+
+Reference: Main README, line 10
+
+<Note>
+ProveKit pins to a specific Noir version because it depends on the **ACIR format** (Noir's intermediate representation). Different Noir versions may produce incompatible ACIR.
+</Note>
+
+## Compilation Pipeline
+
+Noir circuits go through several stages before becoming proofs:
+
+```
+┌─────────────┐
+│ Noir Source │  (.nr files)
+└──────┬──────┘
+       │ nargo compile
+       ▼
+┌─────────────┐
+│ ACIR JSON   │  (basic.json)
+└──────┬──────┘
+       │ provekit-cli prepare
+       ▼
+┌─────────────┐
+│ R1CS + Keys │  (prover.pkp, verifier.pkv)
+└──────┬──────┘
+       │ provekit-cli prove
+       ▼
+┌─────────────┐
+│ WHIR Proof  │  (proof.np)
+└─────────────┘
+```
+
+### Stage 1: Noir Compilation
+
+```bash
+cd noir-examples/poseidon-rounds
+nargo compile
+```
+
+Produces `target/basic.json` - the ACIR representation.
+
+**ACIR** (Abstract Circuit Intermediate Representation) contains:
+- Witness definitions
+- Arithmetic constraints (expressions)
+- Blackbox function calls (hash functions, etc.)
+- Memory operations (ROM/RAM)
+- Public input definitions
+
+Reference: Noir documentation
+
+### Stage 2: R1CS Compilation
+
+```bash
+provekit-cli prepare ./target/basic.json --pkp ./prover.pkp --pkv ./verifier.pkv
+```
+
+This:
+1. Parses ACIR JSON
+2. Compiles to R1CS using `noir_to_r1cs()`
+3. Generates WHIR configuration
+4. Creates witness solving instructions
+5. Packages into prover key (PKP) and verifier key (PKV)
+
+Reference: Main README, lines 24-28
+
+<Info>
+**PKP files** contain:
+- R1CS matrices (compressed)
+- Witness builders (solving instructions)
+- WHIR configuration
+- Public input ABI
+
+**PKV files** contain:
+- R1CS matrices (for verification)
+- WHIR configuration
+- Public input definitions
+
+PKP files are typically 10-100× larger than PKV files.
+</Info>
+
+### Stage 3: Witness Generation & Proving
+
+```bash
+provekit-cli prove ./prover.pkp ./Prover.toml -o ./proof.np
+```
+
+This:
+1. Reads inputs from `Prover.toml`
+2. Executes Noir program to generate ACIR witness
+3. Solves R1CS witness vector
+4. Generates WHIR proof
+5. Outputs proof with public inputs
+
+Reference: Main README, lines 30-34, `provekit/prover/src/lib.rs`
+
+### Stage 4: Verification
+
+```bash
+provekit-cli verify ./verifier.pkv ./proof.np
+```
+
+Verifies the proof and outputs public inputs.
+
+Reference: Main README, lines 36-40
+
+## Supported ACIR Opcodes
+
+ProveKit supports the following ACIR operations:
+
+### Arithmetic Constraints
+
+**AssertZero**
+
+Polynomial expressions with multiplication:
+```noir
+let z = x * y;
+assert(z == expected);
+```
+
+Compiles to R1CS constraint: `A(w) × B(w) = C(w)`
+
+Reference: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:468`
+
+<Tip>
+**Field arithmetic is cheap** in ProveKit. Use addition, subtraction, and multiplication freely. These operations are native to R1CS.
+</Tip>
+
+### Memory Operations
+
+**MemoryInit**
+
+Initialize ROM (read-only) or RAM (read-write) memory:
+```noir
+let rom: [Field; 256] = /* initialization */;
+```
+
+Reference: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:471-493`
+
+**MemoryOp**
+
+Read or write memory:
+```noir
+let value = rom[index];  // Read
+ram[index] = value;      // Write (if RAM)
+```
+
+ProveKit uses **permutation checking** to verify memory consistency without constraint blowup.
+
+Reference: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:494-547`, `provekit/r1cs-compiler/src/memory/`
+
+<Note>
+**Memory operations are efficient** in ProveKit:
+- ROM reads: ~5 constraints per read
+- RAM reads/writes: ~10 constraints per operation
+
+Memory checking uses grand product arguments instead of sorting networks.
+</Note>
+
+### Blackbox Functions
+
+**RANGE**
+
+Range check (verify value fits in N bits):
+```noir
+std::range_check(value, num_bits);
+```
+
+ProveKit **batches** range checks by bit-width for efficiency.
+
+**Cost**: ~1-2 constraints per range check (when batched)
+
+Reference: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:549-569`, `provekit/r1cs-compiler/src/range_check.rs`
+
+**AND / XOR**
+
+Bitwise operations on 32-bit values:
+```noir
+let result = value1 & value2;  // AND
+let result = value1 ^ value2;  // XOR
+```
+
+ProveKit:
+1. Decomposes 32-bit values into bytes
+2. Uses 8-bit lookup tables for byte operations
+3. Recombines results
+
+**Cost**: ~12 constraints per 32-bit operation (batched)
+
+Reference: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:575-580`, `provekit/r1cs-compiler/src/binops.rs`
+
+<Info>
+**Batching matters**: The first AND operation in a circuit is expensive (building lookup table). Subsequent operations are much cheaper (~2 constraints each).
+
+If you only need a few bit operations, consider alternative approaches using field arithmetic.
+</Info>
+
+**Poseidon2Permutation**
+
+Native Poseidon2 hash function:
+```noir
+use std::hash::poseidon2;
+let hash = poseidon2::Poseidon2::hash(inputs, len);
+```
+
+Supported widths: 2, 3, 4, 8, 12, 16
+
+**Cost**: ~100-200 constraints (depending on width)
+
+Reference: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:581-606`, `provekit/r1cs-compiler/src/poseidon2/`
+
+<Tip>
+**Poseidon2 is the most efficient hash** in ProveKit:
+- Arithmetic-friendly (native field operations)
+- ~10× cheaper than SHA-256
+- Directly supported in constraints
+
+Use Poseidon2 for in-circuit hashing whenever possible.
+</Tip>
+
+**Sha256Compression**
+
+SHA-256 compression function (single block):
+```noir
+use std::sha256;
+let hash = sha256::sha256_var(message, message_size);
+```
+
+**Cost**: ~25,000 constraints per block
+
+Reference: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:607-629`, `provekit/r1cs-compiler/src/sha256_compression.rs`
+
+<Note>
+SHA-256 is **expensive** in constraints because:
+- Bit operations (rotations, XORs) are costly
+- 64 rounds per compression
+- Requires extensive range checks
+
+Only use SHA-256 when external compatibility requires it (e.g., verifying Bitcoin signatures).
+</Note>
+
+### Unsupported Operations
+
+ProveKit does **not** support:
+- **Brillig foreign calls** (external program calls)
+- **Recursive proof verification** (use gnark-whir for recursion)
+- **EC operations on non-BN254 curves**
+- **Unconstrained functions** (these run during witness generation only)
+
+Reference: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:630-635`
+
+## Witness Generation
+
+Witness generation happens in two stages:
+
+### ACIR Witness Execution
+
+ProveKit uses Noir's execution engine to solve ACIR witnesses:
+
+```rust
+let initial_witness = self.witness_generator.abi().encode(&input_map, None)?;
+let witness_stack = nargo::ops::execute_program(
+    &self.program,
+    initial_witness,
+    &solver,
+    &mut foreign_call_executor,
+)?;
+```
+
+This:
+1. Encodes Prover.toml inputs using the ABI
+2. Executes unconstrained functions
+3. Solves ACIR witness constraints
+4. Handles Brillig VM operations
+
+Reference: `provekit/prover/src/lib.rs:46-58`
+
+<Info>
+**Brillig code** (Noir's VM) runs during witness generation but doesn't add constraints. Use unconstrained functions for expensive computations that don't need proving.
+
+```noir
+unconstrained fn expensive_computation(x: Field) -> Field {
+    // Complex logic that doesn't add constraints
+}
+```
+</Info>
+
+### R1CS Witness Solving
+
+After ACIR witnesses are known, ProveKit solves R1CS witnesses:
+
+```rust
+crate::r1cs::solve_witness_vec(
+    &mut witness,
+    witness_builders,
+    &acir_witness_idx_to_value_map,
+    &mut merlin,
+);
+```
+
+This executes the **witness builders** generated during compilation:
+- Map ACIR witnesses to R1CS indices
+- Compute products (intermediate values)
+- Evaluate linear combinations
+- Solve batched operations (range checks, binops)
+
+Reference: `provekit/prover/src/lib.rs:94-99`, `provekit/prover/src/r1cs/mod.rs`
+
+### Two-Phase Solving
+
+When circuits use Fiat-Shamir challenges:
+
+**Phase 1 (w1):** Solve challenge-independent witnesses
+```rust
+solve_witness_vec(&mut witness, w1_layers, ...); 
+let commitment_1 = self.whir_for_witness.commit(..., w1, true)?;
+```
+
+**Transcript Challenge:** Extract challenge from commitment
+```rust
+let challenge = merlin.squeeze_challenge(...);
+```
+
+**Phase 2 (w2):** Solve challenge-dependent witnesses
+```rust
+solve_witness_vec(&mut witness, w2_layers, ...);
+let commitment_2 = self.whir_for_witness.commit(..., w2, false)?;
+```
+
+This ensures the prover cannot choose witness values maliciously based on challenge values.
+
+Reference: `provekit/prover/src/lib.rs:92-167`
+
+<Note>
+The **split between w1 and w2** is determined automatically during compilation based on witness dependencies. You don't need to specify it manually.
+</Note>
+
+## Writing Efficient Circuits
+
+Follow these guidelines for optimal ProveKit performance:
+
+### 1. Prefer Field Arithmetic
+
+**Good:**
+```noir
+let sum = a + b + c;
+let product = x * y * z;
+let result = (a + b) * (c + d);
+```
+
+**Avoid when possible:**
+```noir
+let bits = value.to_le_bits(32);  // Expensive bit decomposition
+for i in 0..32 {
+    // Bit manipulation
+}
+```
+
+Field operations are nearly free; bit operations cost ~1 constraint per bit.
+
+### 2. Use Native Blackbox Functions
+
+**Good:**
+```noir
+use std::hash::poseidon2;
+let hash = poseidon2::Poseidon2::hash(inputs, 4);
+```
+
+**Avoid:**
+```noir
+// Don't implement hash functions manually
+let hash = manual_sponge_construction(inputs);
+```
+
+Native implementations are 10-100× more efficient.
+
+### 3. Batch Similar Operations
+
+When you need multiple bit operations:
+
+**Good:**
+```noir
+let r1 = a1 & b1;
+let r2 = a2 & b2;
+let r3 = a3 & b3;  // Shares lookup table with r1, r2
+```
+
+**Less efficient:**
+```noir
+let r1 = a1 & b1;  // Only one operation → lookup table overhead
+```
+
+The first operation pays setup cost; subsequent operations are cheap.
+
+### 4. Minimize Range Checks
+
+Range checks are batched but still costly:
+
+**Good:**
+```noir
+// Only check when necessary for soundness
+std::range_check(value, 64);
+```
+
+**Avoid:**
+```noir
+// Redundant checks
+std::range_check(a, 32);
+std::range_check(b, 32);
+std::range_check(a + b, 64);  // May be provable from a,b bounds
+```
+
+### 5. Use Memory Efficiently
+
+Large arrays are fine if accessed sparsely:
+
+**Good:**
+```noir
+let lookup_table: [Field; 1024] = /* ... */;
+let value = lookup_table[index];  // Few accesses → efficient
+```
+
+**Avoid:**
+```noir
+for i in 0..1024 {
+    sum += lookup_table[i];  // Dense access → better as computation
+}
+```
+
+Memory checking cost scales with number of accesses, not array size.
+
+### 6. Leverage Unconstrained Functions
+
+**Good:**
+```noir
+unconstrained fn precompute_hint(x: Field) -> Field {
+    // Expensive computation
+    // Doesn't add constraints
+}
+
+fn verify_hint(x: Field, hint: Field) {
+    assert(hint == expected(x));  // Cheap verification
+}
+```
+
+Move expensive computation to witness generation; verify cheaply in circuit.
+
+## Example: Poseidon Rounds
+
+Let's analyze a simple Noir circuit:
+
+```noir
+use dep::std::hash::poseidon2;
+
+fn main(inputs: [Field; 4], num_rounds: u32) -> pub Field {
+    let mut state = inputs;
+    for _ in 0..num_rounds {
+        state = poseidon2::Poseidon2::hash(state, 4);
+    }
+    state[0]
+}
+```
+
+**Compilation:**
+```bash
+cd noir-examples/poseidon-rounds
+nargo compile
+provekit-cli prepare ./target/basic.json --pkp prover.pkp --pkv verifier.pkv
+```
+
+**Circuit analysis:**
+```bash
+provekit-cli circuit_stats ./target/basic.json
+```
+
+Shows:
+- Poseidon2 constraints: `~150 × num_rounds`
+- Total witnesses: `~20 × num_rounds`
+- No range checks or binops (pure arithmetic)
+
+**Proving:**
+```toml
+# Prover.toml
+inputs = ["1", "2", "3", "4"]
+num_rounds = "10"
+```
+
+```bash
+provekit-cli prove ./prover.pkp ./Prover.toml -o ./proof.np
+```
+
+Generates proof in ~50-200ms (depending on num_rounds).
+
+Reference: Main README, lines 15-40
+
+## Debugging R1CS Compilation
+
+If compilation fails or produces unexpected constraints:
+
+### 1. Check Supported Opcodes
+
+Look for unsupported operations in the error:
+```
+Unsupported Opcode: ...
+```
+
+Reference: `provekit/r1cs-compiler/src/noir_to_r1cs.rs:634`
+
+### 2. Analyze Constraint Breakdown
+
+```bash
+provekit-cli circuit_stats ./target/basic.json
+```
+
+Shows exactly where constraints come from.
+
+### 3. Verify PKP Contents
+
+```bash
+provekit-cli analyze-pkp ./prover.pkp
+```
+
+Breaks down prover key file size by component.
+
+Reference: Main README, lines 54-58
+
+### 4. Inspect Public Inputs
+
+```bash
+provekit-cli show-inputs ./verifier.pkv ./proof.np
+```
+
+Displays public inputs with variable names from the ABI.
+
+Reference: Main README, lines 60-64
+
+## Next Steps
+
+- [R1CS Constraint Systems](/concepts/r1cs) - Understanding the compilation target
+- [WHIR Proofs](/concepts/whir-proofs) - How R1CS instances are proven
+- [Architecture](/concepts/architecture) - Overall system design

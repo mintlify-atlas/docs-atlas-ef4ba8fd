@@ -1,0 +1,153 @@
+---
+title: 'Basic Circuit'
+description: 'Simple Poseidon2 hash verification circuit'
+---
+
+This example demonstrates a basic zero-knowledge circuit that verifies a Poseidon2 hash computation. It's the simplest circuit pattern in ProveKit and serves as a starting point for understanding circuit construction.
+
+## Circuit Overview
+
+The circuit takes two field elements as input, computes their Poseidon2 hash, and verifies the result matches an expected hash value.
+
+## Circuit Code
+
+Here's the complete circuit implementation from `noir-examples/basic/src/main.nr`:
+
+```noir
+use dep::poseidon2;
+
+fn main(plains: [Field; 2], result: Field) {
+    let hash = poseidon2::bn254::hash_2(plains);
+    print(hash);
+    assert(hash == result);
+}
+```
+
+### What This Circuit Does
+
+1. **Imports Poseidon2**: Uses the Poseidon2 hash function library for BN254 curve
+2. **Takes Inputs**: Accepts two field elements (`plains`) and an expected result
+3. **Computes Hash**: Calls `poseidon2::bn254::hash_2()` to hash the two inputs
+4. **Prints Result**: Outputs the hash value for debugging
+5. **Verifies**: Asserts the computed hash matches the expected result
+
+## Input Configuration
+
+The `Prover.toml` file specifies the circuit inputs:
+
+```toml
+plains = [1, 2]
+a = 1
+b = 2
+c = 3
+d = 5
+x = 0
+result = '0x0e90c132311e864e0c8bca37976f28579a2dd9436bbc11326e21ec7c00cea5b2'
+```
+
+- **plains**: The two field elements to hash `[1, 2]`
+- **result**: The expected Poseidon2 hash output
+- **a, b, c, d, x**: Additional variables for testing purposes
+
+## Complete Workflow
+
+### 1. Compile the Circuit
+
+First, compile the Noir circuit to generate the circuit artifacts:
+
+```bash
+nargo compile
+```
+
+This produces:
+- Circuit bytecode
+- ABI (Application Binary Interface)
+- Constraint information
+
+### 2. Prepare the Proving System
+
+Generate the proving and verification keys:
+
+```bash
+provekit prepare basic
+```
+
+Expected output:
+```
+Preparing circuit: basic
+Generating proving key...
+Generating verification key...
+Preparation complete
+```
+
+### 3. Generate a Proof
+
+Create a zero-knowledge proof using the inputs:
+
+```bash
+provekit prove basic
+```
+
+This will:
+1. Read inputs from `Prover.toml`
+2. Execute the circuit
+3. Generate a cryptographic proof
+4. Output proof file (e.g., `proof.json`)
+
+Expected output:
+```
+Generating proof for: basic
+Computed hash: 0x0e90c132311e864e0c8bca37976f28579a2dd9436bbc11326e21ec7c00cea5b2
+Proof generated successfully
+Proof saved to: proof.json
+```
+
+### 4. Verify the Proof
+
+Verify the proof without revealing the inputs:
+
+```bash
+provekit verify basic proof.json
+```
+
+Expected output:
+```
+Verifying proof for: basic
+Verification successful
+```
+
+## Key Concepts
+
+### Poseidon2 Hash Function
+
+Poseidon2 is a zero-knowledge friendly hash function optimized for:
+- **Efficiency**: Fewer constraints than traditional hash functions
+- **Security**: Cryptographically secure for ZK applications
+- **Native Field Operations**: Works directly with field elements
+
+### Circuit Constraints
+
+This basic circuit creates constraints that:
+1. Ensure the hash computation is correct
+2. Verify the result matches the expected value
+3. Can be verified without revealing the input values
+
+## Use Cases
+
+- **Hash Verification**: Prove you know a preimage without revealing it
+- **Commitment Schemes**: Create commitments to data
+- **Building Block**: Foundation for more complex circuits
+- **Learning**: Understanding basic ZK circuit patterns
+
+## Next Steps
+
+- Try changing the input values in `Prover.toml`
+- Compute the expected hash and update the `result` field
+- Experiment with different numbers of inputs using `hash_4`, `hash_8`, etc.
+- Explore the [Poseidon example](/examples/poseidon) for iterative hashing
+
+## Related Examples
+
+- [Poseidon Rounds](/examples/poseidon) - Multiple hash iterations
+- [SHA-256](/examples/sha256) - Alternative hash function
+- [EdDSA Signatures](/examples/eddsa) - Signature verification

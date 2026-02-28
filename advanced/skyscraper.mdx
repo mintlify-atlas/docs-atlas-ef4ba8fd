@@ -1,0 +1,284 @@
+---
+title: 'Skyscraper Optimization'
+description: 'Deep dive into Skyscraper field arithmetic and optimization techniques'
+---
+
+# Skyscraper Optimization
+
+Skyscraper is ProveKit's high-performance field arithmetic engine optimized for the BN254 scalar field. It implements specialized cryptographic primitives using advanced floating-point techniques and SIMD operations.
+
+## Overview
+
+Skyscraper provides optimized implementations of:
+
+- **Field arithmetic**: Addition, subtraction, multiplication, squaring over BN254-Fr
+- **Compression functions**: Two-to-one hash compression for Merkle trees
+- **SIMD batching**: Parallel processing of multiple field operations
+- **Architecture-specific optimizations**: Specialized code paths for x86_64 and ARM64
+
+The implementation can be found in `skyscraper/core/` and related modules.
+
+## Field Representation
+
+### M31 and CM31 Fields
+
+Skyscraper uses a 4-limb representation for BN254 scalar field elements:
+
+```rust
+// Field element as [u64; 4]
+// Represents a 254-bit integer in little-endian format
+pub type FieldElement = [u64; 4];
+```
+
+Field elements are stored in non-Montgomery form by default, with Montgomery representation used internally for multiplication.
+
+### BN254 Modulus
+
+The BN254 scalar field modulus and its multiples are pre-computed:
+
+```rust
+// From skyscraper/core/src/constants.rs
+pub const MODULUS: [[u64; 4]; 6] = [
+    [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000],
+    [0x43e1f593f0000001, 0x2833e84879b97091, 0xb85045b68181585d, 0x30644e72e131a029],
+    // ... more multiples for optimization
+];
+```
+
+Pre-computing modulus multiples enables faster reduction operations.
+
+## Arithmetic Operations
+
+### Basic Operations
+
+Skyscraper provides constant-time field operations:
+
+```rust
+// Addition with overflow detection
+pub const fn add(l: [u64; 4], r: [u64; 4]) -> [u64; 4] {
+    let (r, carry) = overflowing_add(l, r);
+    debug_assert!(!carry);
+    r
+}
+
+// Vectorized addition - parallel processing
+pub fn addv<const N: usize>(l: [[u64; 4]; N], r: [[u64; 4]; N]) -> [[u64; 4]; N] {
+    array::from_fn(|i| add(l[i], r[i]))
+}
+```
+
+Reference: `skyscraper/core/src/arithmetic.rs`
+
+### Compression Function
+
+The Skyscraper compression function implements a two-to-one hash:
+
+```rust
+// Simple scalar compression
+pub fn compress(l: [u64; 4], r: [u64; 4]) -> [u64; 4] {
+    // Computes (l + r)² mod p using Montgomery multiplication
+    generic::compress(|x| [square(x[0])], [[l, r]])[0]
+}
+```
+
+Reference: `skyscraper/core/src/simple.rs:12`
+
+### Batch Processing
+
+For optimal throughput, Skyscraper processes multiple compressions in parallel:
+
+```rust
+pub fn compress_many(messages: &[u8], hashes: &mut [u8]) {
+    generic::compress_many(
+        |input| generic::compress(|x| [square(x[0])], input),
+        messages,
+        hashes,
+    )
+}
+```
+
+The optimal batch size is defined as:
+
+```rust
+// From skyscraper/core/src/lib.rs
+pub const WIDTH_LCM: usize = 12;
+```
+
+Processing in batches of 12 (or multiples) ensures optimal SIMD utilization across all architectures.
+
+## BN254 Multiplier
+
+### Floating-Point Montgomery Multiplication
+
+Skyscraper's BN254 multiplier uses floating-point arithmetic for faster multiplication on ARM and WASM:
+
+<Note>
+  **Why Floating-Point?** On ARM Cortex and WASM, integer multiplication has lower throughput than floating-point FMA (fused multiply-add). By encoding 51-bit limbs into f64 mantissas, we can perform integer multiplication using FMA instructions.
+</Note>
+
+### RNE (Round-to-Nearest-Even) Mode
+
+The RNE implementation uses 5-limb redundant form:
+
+```rust
+// Field elements stored as 5 limbs of 51 bits each
+// 5 × 51 = 255 bits, allowing values up to 2^255 - 1
+type RedundantForm = [Simd<f64, 2>; 5];
+```
+
+Reference: `skyscraper/bn254-multiplier/src/rne/mod.rs:18`
+
+### SIMD Batched Operations
+
+The batched multiplier processes two field operations in parallel:
+
+```rust
+/// Two parallel Montgomery squarings: (v0², v1²)
+pub fn simd_sqr(v0_a: [u64; 4], v1_a: [u64; 4]) -> ([u64; 4], [u64; 4]) {
+    // Convert to SIMD representation
+    let v0_a = u256_to_u255_simd(transpose_u256_to_simd([v0_a, v1_a]));
+    
+    // Compute non-diagonal terms and double them
+    // Compute diagonal terms
+    // Apply Montgomery reduction
+    // ...
+}
+```
+
+Reference: `skyscraper/bn254-multiplier/src/rne/batched.rs:26`
+
+### Architecture-Specific Paths
+
+Skyscraper automatically selects the best implementation:
+
+```rust
+// From provekit/common/src/skyscraper/whir.rs
+#[cfg(target_arch = "aarch64")]
+use skyscraper::block4::compress_many;
+
+#[cfg(not(target_arch = "aarch64"))]
+use skyscraper::simple::compress_many;
+```
+
+- **ARM64 (aarch64)**: Uses NEON SIMD with `block3` and `block4` implementations
+- **x86_64**: Uses portable SIMD
+- **WASM**: Uses relaxed SIMD with special flags
+
+## Round Constants
+
+Skyscraper hash uses 18 round constants derived from a Sage implementation:
+
+```rust
+pub const ROUND_CONSTANTS: [[u64; 4]; 18] = [
+    [0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000],
+    [0x903c4324270bd744, 0x873125f708a7d269, 0x081dd27906c83855, 0x276b1823ea6d7667],
+    // ... 16 more rounds
+];
+```
+
+Reference: `skyscraper/core/src/constants.rs:30`
+
+Pre-computed values `MODULUS_N_MINUS_RC` optimize the reduction step.
+
+## Performance Characteristics
+
+### Optimal Batch Sizes
+
+For maximum throughput, use multiples of the LCM width:
+
+```rust
+let batch_size = skyscraper::WIDTH_LCM; // 12
+let preferred = SkyscraperHashEngine.preferred_batch_size(); // 12
+```
+
+### Memory Layout
+
+Skyscraper processes in fixed-size groups to avoid heap allocation:
+
+```rust
+const GROUP: usize = 4 * skyscraper::WIDTH_LCM; // 48 operations
+let mut pair_buf = [0u8; GROUP * 64]; // Stack-allocated, 3 KiB
+```
+
+Reference: `provekit/common/src/skyscraper/whir.rs:72`
+
+## Integration with ProveKit
+
+Skyscraper is integrated as a hash engine in the WHIR proof system:
+
+```rust
+use provekit_common::skyscraper::SKYSCRAPER;
+
+// Engine ID: SHA3-256("whir::hash" || "skyscraper")
+pub const SKYSCRAPER: EngineId = EngineId::new([
+    0xa5, 0x0d, 0x5e, 0xe2, /* ... */
+]);
+```
+
+The hash engine processes multiple messages in batches:
+
+```rust
+fn hash_many(&self, size: usize, input: &[u8], output: &mut [Hash]) {
+    // Leaf hashing: left-fold 32-byte chunks, batched across messages
+    compress_many(input, out_bytes);
+}
+```
+
+Reference: `provekit/common/src/skyscraper/whir.rs:38`
+
+## Advanced Optimizations
+
+### Rounding Mode Control
+
+The `fp-rounding` module manages floating-point rounding modes:
+
+- **x86_64**: Uses SSE/AVX control registers
+- **aarch64**: Uses FPCR (Floating-Point Control Register)
+
+Reference: `skyscraper/fp-rounding/src/arch/`
+
+### SIMD Features
+
+Enable SIMD features for optimal performance:
+
+```toml
+# .cargo/config.toml
+[target.wasm32-wasip2]
+rustflags = ["-C", "target-feature=+simd128,+relaxed-simd"]
+```
+
+Reference: `.cargo/config.toml:6`
+
+### Feature Flags
+
+Skyscraper uses nightly Rust features:
+
+```rust
+#![feature(portable_simd)]
+#![feature(bigint_helper_methods)]
+#![feature(cold_path)]
+```
+
+These enable:
+- **portable_simd**: Cross-platform SIMD abstractions
+- **bigint_helper_methods**: Efficient carry/borrow operations
+- **cold_path**: Better branch prediction for error paths
+
+## Best Practices
+
+<Card title="Batch Operations" icon="layer-group">
+  Always process operations in batches of `WIDTH_LCM` (12) or multiples for optimal SIMD utilization.
+</Card>
+
+<Card title="Stack Allocation" icon="memory">
+  Use stack-allocated buffers for small batches (< 4 KiB) to avoid heap overhead.
+</Card>
+
+<Card title="Architecture Detection" icon="microchip">
+  Let Skyscraper auto-select the optimal implementation path based on target architecture.
+</Card>
+
+## See Also
+
+- [Performance Optimization](/advanced/optimization) - General performance tuning
+- [FFI Bindings](/advanced/ffi-bindings) - Using Skyscraper from other languages
